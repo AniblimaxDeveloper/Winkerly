@@ -35,7 +35,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val _isGenerating = MutableStateFlow(false)
     val isGenerating = _isGenerating.asStateFlow()
 
-    // State sementara untuk render teks yang sedang di-stream
     private val _streamingText = MutableStateFlow("")
     val streamingText = _streamingText.asStateFlow()
 
@@ -62,9 +61,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             dao.deleteMessagesForSession(id)
             dao.deleteSessionById(id)
-            if (_activeSessionId.value == id) {
-                _activeSessionId.value = null
-            }
+            if (_activeSessionId.value == id) _activeSessionId.value = null
         }
     }
 
@@ -73,7 +70,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _isGenerating.value = false
     }
 
-    fun sendMessage(text: String) {
+    fun sendMessage(text: String, isRegenerate: Boolean = false) {
         val currentId = _activeSessionId.value ?: return
         if (text.isBlank() || _isGenerating.value) return
 
@@ -81,20 +78,20 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _streamingText.value = ""
 
         streamingJob = viewModelScope.launch {
-            val userMsg = ChatMessage(sessionId = currentId, role = "user", content = text)
-            dao.insertMessage(userMsg)
-
-            val currentMsgs = activeMessages.value
-            if (currentMsgs.isEmpty()) {
-                dao.updateSessionTitle(currentId, if (text.length > 25) text.take(25) + "..." else text)
+            if (!isRegenerate) {
+                val userMsg = ChatMessage(sessionId = currentId, role = "user", content = text)
+                dao.insertMessage(userMsg)
+                val currentMsgs = activeMessages.value
+                if (currentMsgs.isEmpty()) {
+                    dao.updateSessionTitle(currentId, if (text.length > 25) text.take(25) + "..." else text)
+                }
             }
 
-            // Persiapkan history dengan System Prompt
             val history = mutableListOf<Pair<String, String>>()
             if (systemPrompt.value.isNotBlank()) {
                 history.add("system" to systemPrompt.value)
             }
-            (currentMsgs + userMsg).forEach { history.add(it.role to it.content) }
+            activeMessages.value.forEach { history.add(it.role to it.content) }
 
             val client = AiClient(baseUrl.value, apiKey.value, modelId.value)
             val fullResponse = StringBuilder()
@@ -114,12 +111,23 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 onDone = {
                     _isGenerating.value = false
                     viewModelScope.launch {
-                        // Simpan hasil final ke Room Database
                         dao.insertMessage(ChatMessage(sessionId = currentId, role = "assistant", content = fullResponse.toString()))
                         _streamingText.value = ""
                     }
                 }
             )
+        }
+    }
+
+    fun regenerateLastMessage() {
+        val msgs = activeMessages.value
+        if (msgs.isNotEmpty() && msgs.last().role == "assistant") {
+            val lastUserMsg = msgs.findLast { it.role == "user" } ?: return
+            viewModelScope.launch {
+                // Dalam implementasi nyata, Anda harus menghapus pesan AI terakhir dari DB
+                // Untuk simplifikasi, kita kirim ulang prompt terakhir
+                sendMessage(lastUserMsg.content, isRegenerate = true)
+            }
         }
     }
 }

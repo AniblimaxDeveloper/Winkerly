@@ -3,10 +3,13 @@ package com.winkerly.app.ui
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.speech.tts.TextToSpeech
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
@@ -23,6 +26,7 @@ import com.winkerly.app.data.db.ChatMessage
 import com.winkerly.app.ui.components.MarkdownText
 import com.winkerly.app.ui.viewmodel.ChatViewModel
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,6 +43,19 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
     val streamingText by vm.streamingText.collectAsState()
     
     var input by remember { mutableStateOf("") }
+
+    // Inisialisasi Text-to-Speech
+    var tts by remember { mutableStateOf<TextToSpeech?>(null) }
+    LaunchedEffect(Unit) {
+        tts = TextToSpeech(context) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                tts?.language = Locale.getDefault()
+            }
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose { tts?.stop(); tts?.shutdown() }
+    }
 
     LaunchedEffect(messages.size, streamingText) {
         if (messages.isNotEmpty()) {
@@ -95,6 +112,22 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                         }
                     },
                     actions = {
+                        // Tombol Share
+                        if (messages.isNotEmpty()) {
+                            IconButton(onClick = {
+                                val shareText = messages.joinToString("\n\n") { 
+                                    "${if (it.role == "user") "You" else "Winkerly"}: ${it.content}" 
+                                }
+                                val sendIntent = Intent().apply {
+                                    action = Intent.ACTION_SEND
+                                    putExtra(Intent.EXTRA_TEXT, shareText)
+                                    type = "text/plain"
+                                }
+                                context.startActivity(Intent.createChooser(sendIntent, "Bagikan Chat"))
+                            }) {
+                                Icon(Icons.Default.Share, contentDescription = "Share")
+                            }
+                        }
                         IconButton(onClick = onSettings) {
                             Icon(Icons.Default.Settings, contentDescription = "Settings")
                         }
@@ -110,13 +143,36 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                 } else {
                     LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().padding(12.dp)) {
                         items(messages) { msg ->
-                            MessageBubble(msg, context)
+                            MessageBubble(
+                                msg = msg, 
+                                context = context, 
+                                tts = tts,
+                                onRegenerate = { vm.regenerateLastMessage() }
+                            )
                         }
                         if (isGenerating) {
                             item {
-                                // PERBAIKAN: Menambahkan sessionId = activeId ?: 0L
-                                MessageBubble(ChatMessage(sessionId = activeId ?: 0L, role = "assistant", content = streamingText.ifEmpty { "..." }), context, isStreaming = true)
+                                MessageBubble(
+                                    msg = ChatMessage(sessionId = activeId ?: 0L, role = "assistant", content = streamingText.ifEmpty { "..." }), 
+                                    context = context, 
+                                    tts = tts,
+                                    isStreaming = true
+                                )
                             }
+                        }
+                    }
+                }
+
+                // Quick Prompts (Hanya muncul kalau chat kosong)
+                if (messages.isEmpty() && activeId != null && !isGenerating) {
+                    LazyRow(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
+                        val prompts = listOf("Tulis kode Kotlin", "Jelaskan Fisika", "Buat puisi", "Resep masakan")
+                        items(prompts) { prompt ->
+                            AssistChip(
+                                onClick = { vm.sendMessage(prompt) },
+                                label = { Text(prompt) },
+                                modifier = Modifier.padding(end = 8.dp)
+                            )
                         }
                     }
                 }
@@ -148,7 +204,13 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
 }
 
 @Composable
-fun MessageBubble(msg: ChatMessage, context: Context, isStreaming: Boolean = false) {
+fun MessageBubble(
+    msg: ChatMessage, 
+    context: Context, 
+    tts: TextToSpeech?, 
+    isStreaming: Boolean = false,
+    onRegenerate: () -> Unit = {}
+) {
     Row(
         Modifier.fillMaxWidth().padding(vertical = 8.dp),
         horizontalArrangement = if (msg.role == "user") Arrangement.End else Arrangement.Start
@@ -167,11 +229,24 @@ fun MessageBubble(msg: ChatMessage, context: Context, isStreaming: Boolean = fal
                         color = if (msg.role == "user") Color(0xFF7C9CFF) else Color.White
                     )
                     if (msg.role == "assistant" && !isStreaming) {
-                        IconButton(onClick = {
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            clipboard.setPrimaryClip(ClipData.newPlainText("Winkerly", msg.content))
-                        }, modifier = Modifier.size(24.dp)) {
-                            Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = Color.Gray)
+                        Row {
+                            // Tombol TTS (Baca Suara)
+                            IconButton(onClick = { tts?.speak(msg.content, TextToSpeech.QUEUE_FLUSH, null, "") }, modifier = Modifier.size(24.dp)) {
+                                Icon(Icons.Default.VolumeUp, contentDescription = "Speak", tint = Color.Gray)
+                            }
+                            Spacer(Modifier.width(4.dp))
+                            // Tombol Copy
+                            IconButton(onClick = {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                clipboard.setPrimaryClip(ClipData.newPlainText("Winkerly", msg.content))
+                            }, modifier = Modifier.size(24.dp)) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = Color.Gray)
+                            }
+                            Spacer(Modifier.width(4.dp))
+                            // Tombol Regenerate
+                            IconButton(onClick = onRegenerate, modifier = Modifier.size(24.dp)) {
+                                Icon(Icons.Default.Refresh, contentDescription = "Regenerate", tint = Color.Gray)
+                            }
                         }
                     }
                 }
