@@ -1,7 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
-    id("com.google.devtools.ksp") version "2.1.0-1.0.29"
+    id("com.google.devtools.ksp") version "1.9.23-1.0.19"
 }
 
 android {
@@ -35,7 +35,7 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
-    composeOptions { kotlinCompilerExtensionVersion = "1.6.10" }
+    composeOptions { kotlinCompilerExtensionVersion = "1.5.11" }
 }
 
 dependencies {
@@ -45,7 +45,7 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
-    implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.42.0")
+    implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.34.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
     
     // Networking
