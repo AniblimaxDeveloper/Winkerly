@@ -18,14 +18,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val settingsManager = SettingsManager(app)
 
     val apiKey = settingsManager.apiKey.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "")
-    val baseUrl = settingsManager.baseUrl.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "")
     val modelId = settingsManager.modelId.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "")
     val systemPrompt = settingsManager.systemPrompt.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "")
     val accentColor = settingsManager.accentColor.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "#7C9CFF")
     val temperature = settingsManager.temperature.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 0.7f)
-    val maxTokens = settingsManager.maxTokens.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "2048")
+    val maxTokens = settingsManager.maxTokens.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 2048f)
     val fontSize = settingsManager.fontSize.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 16f)
-    val darkMode = settingsManager.darkMode.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), true)
+    val ttsSpeed = settingsManager.ttsSpeed.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 1.0f)
+    val ttsPitch = settingsManager.ttsPitch.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 1.0f)
+    val hapticEnabled = settingsManager.hapticEnabled.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), true)
+    val autoCopy = settingsManager.autoCopy.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), false)
 
     val allSessions = dao.getAllSessions().stateIn(viewModelScope, SharingStarted.WhileSubscribed(), emptyList())
     
@@ -56,15 +58,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun setSearchQuery(query: String) { _searchQuery.value = query }
     fun clearError() { _errorMessage.value = null }
 
-    fun saveSettings(key: String, url: String, model: String, prompt: String, color: String, temp: Float, tokens: String, font: Float, dark: Boolean) {
-        viewModelScope.launch { settingsManager.saveSettings(key, url, model, prompt, color, temp, tokens, font, dark) }
+    fun saveSettings(key: String, model: String, prompt: String, color: String, temp: Float, tokens: Float, font: Float, speed: Float, pitch: Float, haptic: Boolean, autoCopy: Boolean) {
+        viewModelScope.launch { settingsManager.saveSettings(key, model, prompt, color, temp, tokens, font, speed, pitch, haptic, autoCopy) }
     }
 
     fun testConnection(key: String) {
         viewModelScope.launch {
             val client = AiClient("https://openrouter.ai/api/v1", key, "openrouter/free")
             client.streamChat(listOf("user" to "hi"), 
-                onToken = { /* ignore */ }, 
+                onToken = { }, 
                 onError = { _errorMessage.value = "Gagal: $it" },
                 onDone = { _errorMessage.value = "Koneksi Berhasil!" }
             )
@@ -80,14 +82,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun selectSession(id: Long) {
-        stopGeneration()
-        _activeSessionId.value = id
-        _streamingText.value = ""
-    }
-
-    fun renameSession(id: Long, newTitle: String) {
-        viewModelScope.launch { dao.updateSessionTitle(id, newTitle) }
+    fun selectSession(id: Long) { stopGeneration(); _activeSessionId.value = id; _streamingText.value = "" }
+    fun renameSession(id: Long, newTitle: String) { viewModelScope.launch { dao.updateSessionTitle(id, newTitle) } }
+    
+    fun clearCurrentChat() {
+        val id = _activeSessionId.value ?: return
+        viewModelScope.launch { dao.deleteMessagesForSession(id) }
     }
 
     fun deleteSession(id: Long) {
@@ -106,10 +106,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun stopGeneration() {
-        streamingJob?.cancel()
-        _isGenerating.value = false
-    }
+    fun stopGeneration() { streamingJob?.cancel(); _isGenerating.value = false }
 
     fun sendMessage(text: String, isRegenerate: Boolean = false) {
         val currentId = _activeSessionId.value ?: return
@@ -132,7 +129,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             if (systemPrompt.value.isNotBlank()) history.add("system" to systemPrompt.value)
             activeMessages.value.forEach { history.add(it.role to it.content) }
 
-            val client = AiClient(baseUrl.value, apiKey.value, modelId.value, temperature.value, maxTokens.value.toIntOrNull() ?: 2048)
+            val client = AiClient("https://openrouter.ai/api/v1", apiKey.value, modelId.value, temperature.value, maxTokens.value.toInt())
             val fullResponse = StringBuilder()
 
             client.streamChat(history,
@@ -142,10 +139,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 },
                 onError = { err ->
                     _isGenerating.value = false
-                    viewModelScope.launch {
-                        _errorMessage.value = "Error: $err"
-                        _streamingText.value = ""
-                    }
+                    viewModelScope.launch { _errorMessage.value = "Error: $err"; _streamingText.value = "" }
                 },
                 onDone = {
                     _isGenerating.value = false
