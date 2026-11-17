@@ -14,10 +14,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -30,6 +31,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.winkerly.app.data.db.ChatMessage
@@ -83,18 +85,19 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
 
     if (selectedMessageForSheet != null) {
         ModalBottomSheet(onDismissRequest = { selectedMessageForSheet = null }) {
+            val msgContent = selectedMessageForSheet?.content ?: ""
             Column(Modifier.padding(16.dp)) {
                 Text("Opsi Pesan", style = MaterialTheme.typography.titleLarge)
                 Spacer(Modifier.height(16.dp))
                 Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
-                    IconButton(onClick = { tts?.speak(selectedMessageForSheet?.content, TextToSpeech.QUEUE_FLUSH, null, ""); selectedMessageForSheet = null }) { Icon(Icons.Default.VolumeUp, contentDescription = "TTS") }
+                    IconButton(onClick = { tts?.speak(msgContent, TextToSpeech.QUEUE_FLUSH, null, ""); selectedMessageForSheet = null }) { Icon(Icons.Default.VolumeUp, contentDescription = "TTS") }
                     IconButton(onClick = { 
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        clipboard.setPrimaryClip(ClipData.newPlainText("Winkerly", selectedMessageForSheet?.content))
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Winkerly", msgContent))
                         selectedMessageForSheet = null 
                     }) { Icon(Icons.Default.ContentCopy, contentDescription = "Copy") }
                     IconButton(onClick = { 
-                        val sendIntent = Intent().apply { action = Intent.ACTION_SEND; putExtra(Intent.EXTRA_TEXT, selectedMessageForSheet?.content); type = "text/plain" }
+                        val sendIntent = Intent().apply { action = Intent.ACTION_SEND; putExtra(Intent.EXTRA_TEXT, msgContent); type = "text/plain" }
                         context.startActivity(Intent.createChooser(sendIntent, "Share Message")); selectedMessageForSheet = null 
                     }) { Icon(Icons.Default.Share, contentDescription = "Share") }
                     IconButton(onClick = { vm.regenerateLastMessage(); selectedMessageForSheet = null }) { Icon(Icons.Default.Refresh, contentDescription = "Regenerate") }
@@ -177,12 +180,28 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                 } else {
                     LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().padding(12.dp)) {
                         items(messages) { msg -> 
-                            MessageBubble(msg, context, fontSize, autoCopy) { selectedMessageForSheet = msg }
+                            // PERBAIKAN: Menggunakan Named Parameters agar tidak error kompilasi
+                            MessageBubble(
+                                msg = msg, 
+                                context = context, 
+                                fontSize = fontSize, 
+                                autoCopy = autoCopy, 
+                                onLongPress = { selectedMessageForSheet = msg },
+                                onDelete = { vm.deleteMessage(msg.id) }
+                            )
                         }
                         if (isGenerating) {
                             item {
                                 if (streamingText.isEmpty()) TypingIndicator()
-                                else MessageBubble(ChatMessage(sessionId = activeId ?: 0L, role = "assistant", content = streamingText, timestamp = System.currentTimeMillis()), context, fontSize, false, {}) 
+                                else MessageBubble(
+                                    msg = ChatMessage(sessionId = activeId ?: 0L, role = "assistant", content = streamingText, timestamp = System.currentTimeMillis()), 
+                                    context = context, 
+                                    fontSize = fontSize, 
+                                    autoCopy = false, 
+                                    onLongPress = {},
+                                    onDelete = {},
+                                    isStreaming = true
+                                ) 
                             }
                         }
                     }
@@ -198,8 +217,8 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                         OutlinedTextField(
                             value = input, onValueChange = { input = it }, modifier = Modifier.weight(1f), placeholder = { Text("Message Winkerly...") },
                             trailingIcon = { if (input.isNotEmpty()) IconButton(onClick = { input = "" }) { Icon(Icons.Default.Clear, contentDescription = "Clear") } },
-                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Send),
-                            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSend = {
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                            keyboardActions = KeyboardActions(onSend = {
                                 val txt = input.trim()
                                 if (txt.isNotEmpty()) { if(hapticEnabled) haptic.performHapticFeedback(HapticFeedbackType.LongPress); vm.sendMessage(txt); input = "" }
                             })
@@ -236,7 +255,15 @@ fun TypingIndicator() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MessageBubble(msg: ChatMessage, context: Context, fontSize: Float, autoCopy: Boolean, onLongPress: () -> Unit, isStreaming: Boolean = false) {
+fun MessageBubble(
+    msg: ChatMessage, 
+    context: Context, 
+    fontSize: Float, 
+    autoCopy: Boolean, 
+    onLongPress: () -> Unit,
+    onDelete: () -> Unit,
+    isStreaming: Boolean = false
+) {
     val formatter = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
     val timeString = formatter.format(Date(msg.timestamp))
 
@@ -245,10 +272,20 @@ fun MessageBubble(msg: ChatMessage, context: Context, fontSize: Float, autoCopy:
         clipboard.setPrimaryClip(ClipData.newPlainText("Winkerly", msg.content))
     }
 
-    val dismissState = rememberSwipeToDismissBoxState()
+    // Fitur Swipe-to-Delete yang sudah berfungsi
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = {
+            if (it == SwipeToDismissBoxValue.EndToStart || it == SwipeToDismissBoxValue.StartToEnd) {
+                if (!isStreaming) onDelete()
+            }
+            false // Selalu kembali ke posisi semula setelah swipe
+        }
+    )
 
     SwipeToDismissBox(
         state = dismissState,
+        enableDismissFromStartToEnd = true,
+        enableDismissFromEndToStart = true,
         backgroundContent = {
             Box(Modifier.fillMaxSize().background(Color.Red, shape = MaterialTheme.shapes.medium), contentAlignment = Alignment.Center) {
                 Icon(Icons.Default.Delete, contentDescription = "Hapus", tint = Color.White)
