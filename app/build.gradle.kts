@@ -44,6 +44,7 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
+    implementation("com.mikepenz:multiplatform-markdown-renderer-android:0.23.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
     
     // Networking
@@ -59,6 +60,4 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.1.0")
     
     // Markdown & Code Highlight
-    implementation("com.halilibo.compose-richtext:richtext-commonmark:0.16.0")
-    implementation("com.halilibo.compose-richtext:richtext-ui-material3:0.16.0")
 }

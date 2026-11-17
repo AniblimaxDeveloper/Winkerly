@@ -3,12 +3,13 @@ package com.winkerly.app.ui.components
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import com.halilibo.richtext.markdown.Markdown
-import com.halilibo.richtext.ui.material3.RichText
+import com.mikepenz.markdown.m3.Markdown
 
 @Composable
 fun MarkdownText(text: String) {
-    RichText(modifier = Modifier.fillMaxWidth()) {
-        Markdown(content = text)
-    }
+    // Markdown dari mikepenz sudah terintegrasi dengan Material 3
+    Markdown(
+        content = text,
+        modifier = Modifier.fillMaxWidth()
+    )
 }
