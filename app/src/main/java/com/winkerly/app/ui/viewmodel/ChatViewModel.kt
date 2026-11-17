@@ -22,6 +22,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val modelId = settingsManager.modelId.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "")
     val systemPrompt = settingsManager.systemPrompt.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "")
     val accentColor = settingsManager.accentColor.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "#7C9CFF")
+    val temperature = settingsManager.temperature.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 0.7f)
+    val maxTokens = settingsManager.maxTokens.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "2048")
+    val fontSize = settingsManager.fontSize.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 16f)
+    val darkMode = settingsManager.darkMode.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), true)
 
     val allSessions = dao.getAllSessions().stateIn(viewModelScope, SharingStarted.WhileSubscribed(), emptyList())
     
@@ -46,10 +50,25 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val _streamingText = MutableStateFlow("")
     val streamingText = _streamingText.asStateFlow()
 
-    fun setSearchQuery(query: String) { _searchQuery.value = query }
+    private val _errorMessage = MutableStateFlow<String?>(null)
+    val errorMessage = _errorMessage.asStateFlow()
 
-    fun saveSettings(key: String, url: String, model: String, prompt: String, color: String) {
-        viewModelScope.launch { settingsManager.saveSettings(key, url, model, prompt, color) }
+    fun setSearchQuery(query: String) { _searchQuery.value = query }
+    fun clearError() { _errorMessage.value = null }
+
+    fun saveSettings(key: String, url: String, model: String, prompt: String, color: String, temp: Float, tokens: String, font: Float, dark: Boolean) {
+        viewModelScope.launch { settingsManager.saveSettings(key, url, model, prompt, color, temp, tokens, font, dark) }
+    }
+
+    fun testConnection(key: String) {
+        viewModelScope.launch {
+            val client = AiClient("https://openrouter.ai/api/v1", key, "openrouter/free")
+            client.streamChat(listOf("user" to "hi"), 
+                onToken = { /* ignore */ }, 
+                onError = { _errorMessage.value = "Gagal: $it" },
+                onDone = { _errorMessage.value = "Koneksi Berhasil!" }
+            )
+        }
     }
 
     fun createNewSession() {
@@ -67,11 +86,23 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _streamingText.value = ""
     }
 
+    fun renameSession(id: Long, newTitle: String) {
+        viewModelScope.launch { dao.updateSessionTitle(id, newTitle) }
+    }
+
     fun deleteSession(id: Long) {
         viewModelScope.launch {
             dao.deleteMessagesForSession(id)
             dao.deleteSessionById(id)
             if (_activeSessionId.value == id) _activeSessionId.value = null
+        }
+    }
+
+    fun deleteAllSessions() {
+        viewModelScope.launch {
+            dao.deleteAllMessages()
+            dao.deleteAllSessions()
+            _activeSessionId.value = null
         }
     }
 
@@ -101,7 +132,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             if (systemPrompt.value.isNotBlank()) history.add("system" to systemPrompt.value)
             activeMessages.value.forEach { history.add(it.role to it.content) }
 
-            val client = AiClient(baseUrl.value, apiKey.value, modelId.value)
+            val client = AiClient(baseUrl.value, apiKey.value, modelId.value, temperature.value, maxTokens.value.toIntOrNull() ?: 2048)
             val fullResponse = StringBuilder()
 
             client.streamChat(history,
@@ -112,7 +143,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 onError = { err ->
                     _isGenerating.value = false
                     viewModelScope.launch {
-                        dao.insertMessage(ChatMessage(sessionId = currentId, role = "assistant", content = "Error: $err"))
+                        _errorMessage.value = "Error: $err"
                         _streamingText.value = ""
                     }
                 },

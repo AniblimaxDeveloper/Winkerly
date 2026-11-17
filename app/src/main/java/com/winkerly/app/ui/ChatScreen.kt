@@ -1,10 +1,15 @@
 package com.winkerly.app.ui
 
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.speech.RecognizerIntent
 import android.speech.tts.TextToSpeech
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -20,9 +25,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.winkerly.app.data.db.ChatMessage
 import com.winkerly.app.ui.components.MarkdownText
 import com.winkerly.app.ui.viewmodel.ChatViewModel
@@ -35,6 +43,7 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val listState = rememberLazyListState()
 
     val sessions by vm.filteredSessions.collectAsState()
@@ -43,20 +52,38 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
     val isGenerating by vm.isGenerating.collectAsState()
     val streamingText by vm.streamingText.collectAsState()
     val searchQuery by vm.searchQuery.collectAsState()
-    
-    var input by remember { mutableStateOf("") }
+    val fontSize by vm.fontSize.collectAsState()
+    val errorMsg by vm.errorMessage.collectAsState()
 
-    var tts by remember { mutableStateOf<TextToSpeech?>(null) }
-    LaunchedEffect(Unit) {
-        tts = TextToSpeech(context) { status ->
-            if (status == TextToSpeech.SUCCESS) { tts?.language = Locale.getDefault() }
+    var input by remember { mutableStateOf("") }
+    var autoScroll by remember { mutableStateOf(true) }
+
+    // STT (Voice Input)
+    val speechLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val spokenText = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
+            if (!spokenText.isNullOrBlank()) input = spokenText
         }
     }
+
+    // TTS
+    var tts by remember { mutableStateOf<TextToSpeech?>(null) }
+    LaunchedEffect(Unit) { tts = TextToSpeech(context) { if (it == TextToSpeech.SUCCESS) tts?.language = Locale.getDefault() } }
     DisposableEffect(Unit) { onDispose { tts?.stop(); tts?.shutdown() } }
 
+    // Auto Scroll
     LaunchedEffect(messages.size, streamingText) {
-        if (messages.isNotEmpty() && !listState.canScrollForward) {
+        if (autoScroll && messages.isNotEmpty()) {
             listState.animateScrollToItem(if (isGenerating) messages.size else messages.size - 1)
+        }
+    }
+
+    // Snackbar Error
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(errorMsg) {
+        if (errorMsg != null) {
+            snackbarHostState.showSnackbar(errorMsg!!)
+            vm.clearError()
         }
     }
 
@@ -67,39 +94,46 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                 Text("Riwayat Chat", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleLarge)
                 
                 OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { vm.setSearchQuery(it) },
+                    value = searchQuery, onValueChange = { vm.setSearchQuery(it) },
                     placeholder = { Text("Cari chat...") },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
                 )
                 Spacer(Modifier.height(8.dp))
 
-                Button(
-                    onClick = { vm.createNewSession(); scope.launch { drawerState.close() } }, 
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = null)
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Button(onClick = { vm.createNewSession(); scope.launch { drawerState.close() } }, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Default.Add, contentDescription = null)
+                        Spacer(Modifier.width(4.dp))
+                        Text("Baru")
+                    }
                     Spacer(Modifier.width(8.dp))
-                    Text("Chat Baru")
+                    OutlinedButton(onClick = { vm.deleteAllSessions() }) {
+                        Icon(Icons.Default.DeleteSweep, contentDescription = null, tint = Color.Red)
+                    }
                 }
                 Spacer(Modifier.height(8.dp))
+                
                 LazyColumn {
                     items(sessions) { session ->
                         ListItem(
                             headlineContent = { Text(session.title, maxLines = 1) },
-                            modifier = Modifier.clickable {
-                                vm.selectSession(session.id)
-                                scope.launch { drawerState.close() }
-                            },
+                            modifier = Modifier.clickable { vm.selectSession(session.id); scope.launch { drawerState.close() } },
                             trailingContent = {
-                                IconButton(onClick = { vm.deleteSession(session.id) }) {
-                                    Icon(Icons.Default.Delete, contentDescription = "Hapus", tint = Color.Gray)
+                                var showMenu by remember { mutableStateOf(false) }
+                                Box {
+                                    IconButton(onClick = { showMenu = true }) { Icon(Icons.Default.MoreVert, contentDescription = null) }
+                                    DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                                        DropdownMenuItem(text = { Text("Rename") }, onClick = { 
+                                            vm.renameSession(session.id, "Renamed Chat"); showMenu = false 
+                                        })
+                                        DropdownMenuItem(text = { Text("Hapus") }, onClick = { 
+                                            vm.deleteSession(session.id); showMenu = false 
+                                        })
+                                    }
                                 }
                             },
-                            colors = ListItemDefaults.colors(
-                                containerColor = if (session.id == activeId) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent
-                            )
+                            colors = ListItemDefaults.colors(containerColor = if (session.id == activeId) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent)
                         )
                     }
                 }
@@ -107,70 +141,78 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
         }
     ) {
         Scaffold(
+            snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
                 TopAppBar(
                     title = { Text("Winkerly") },
-                    navigationIcon = {
-                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                            Icon(Icons.Default.Menu, contentDescription = "Menu")
-                        }
-                    },
+                    navigationIcon = { IconButton(onClick = { scope.launch { drawerState.open() } }) { Icon(Icons.Default.Menu, contentDescription = null) } },
                     actions = {
+                        // Export Chat to TXT
                         if (messages.isNotEmpty()) {
                             IconButton(onClick = {
                                 val shareText = messages.joinToString("\n\n") { "${if (it.role == "user") "You" else "Winkerly"}: ${it.content}" }
                                 val sendIntent = Intent().apply { action = Intent.ACTION_SEND; putExtra(Intent.EXTRA_TEXT, shareText); type = "text/plain" }
-                                context.startActivity(Intent.createChooser(sendIntent, "Bagikan Chat"))
+                                context.startActivity(Intent.createChooser(sendIntent, "Export Chat"))
                             }) { Icon(Icons.Default.Share, contentDescription = "Share") }
                         }
-                        IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, contentDescription = "Settings") }
+                        // Toggle Auto-Scroll
+                        IconButton(onClick = { autoScroll = !autoScroll }) {
+                            Icon(if (autoScroll) Icons.Default.VerticalAlignBottom else Icons.Default.Pause, contentDescription = "Auto Scroll")
+                        }
+                        IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, contentDescription = null) }
                     }
                 )
             },
             floatingActionButton = {
-                // FAB untuk Scroll ke Bawah
                 if (listState.firstVisibleItemIndex > 3) {
-                    FloatingActionButton(
-                        onClick = { scope.launch { listState.animateScrollToItem(messages.size) } },
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = Color.White,
-                        shape = CircleShape,
-                        modifier = Modifier.size(48.dp)
-                    ) {
-                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Scroll Down")
+                    FloatingActionButton(onClick = { scope.launch { listState.animateScrollToItem(messages.size) } }, containerColor = MaterialTheme.colorScheme.primary, contentColor = Color.White, shape = CircleShape, modifier = Modifier.size(48.dp)) {
+                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = null)
                     }
                 }
             }
         ) { padding ->
-            Column(Modifier.padding(padding).fillMaxSize().background(Color(0xFF0B0F19))) {
+            Column(Modifier.padding(padding).fillMaxSize().background(MaterialTheme.colorScheme.background)) {
                 if (activeId == null) {
-                    Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        Text("Buat 'Chat Baru' untuk memulai", color = Color.Gray)
-                    }
+                    Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { Text("Buat 'Chat Baru' untuk memulai", color = Color.Gray) }
                 } else {
                     LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().padding(12.dp)) {
-                        items(messages) { msg -> MessageBubble(msg, context, tts, onRegenerate = { vm.regenerateLastMessage() }) }
+                        items(messages) { msg -> MessageBubble(msg, context, tts, fontSize, onRegenerate = { vm.regenerateLastMessage() }) }
                         if (isGenerating) {
-                            item { MessageBubble(ChatMessage(sessionId = activeId ?: 0L, role = "assistant", content = streamingText.ifEmpty { "..." }), context, tts, isStreaming = true) }
+                            item {
+                                if (streamingText.isEmpty()) TypingIndicator()
+                                else MessageBubble(ChatMessage(sessionId = activeId ?: 0L, role = "assistant", content = streamingText), context, tts, fontSize, isStreaming = true)
+                            }
                         }
                     }
                 }
 
                 if (messages.isEmpty() && activeId != null && !isGenerating) {
                     LazyRow(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
-                        val prompts = listOf("Tulis kode Kotlin", "Jelaskan Fisika", "Buat puisi", "Resep masakan")
+                        val prompts = listOf("Programmer", "Guru", "Penulis", "Jelaskan Fisika")
                         items(prompts) { prompt -> AssistChip(onClick = { vm.sendMessage(prompt) }, label = { Text(prompt) }, modifier = Modifier.padding(end = 8.dp)) }
                     }
                 }
 
-                // Input Area dengan Karakter Counter
+                // Input Area (STT, Char Counter, Clear, Send)
                 Column(Modifier.padding(8.dp)) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = {
+                            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply { putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM) }
+                            speechLauncher.launch(intent)
+                        }) { Icon(Icons.Default.Mic, contentDescription = "Voice Input", tint = MaterialTheme.colorScheme.primary) }
+
                         OutlinedTextField(
                             value = input, onValueChange = { input = it },
                             modifier = Modifier.weight(1f),
                             placeholder = { Text("Message Winkerly...") },
-                            supportingText = { Text("${input.length} karakter") }
+                            trailingIcon = {
+                                if (input.isNotEmpty()) IconButton(onClick = { input = "" }) { Icon(Icons.Default.Clear, contentDescription = "Clear") }
+                            },
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Send),
+                            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSend = {
+                                val txt = input.trim()
+                                if (txt.isNotEmpty()) { haptic.performHapticFeedback(HapticFeedbackType.LongPress); vm.sendMessage(txt); input = "" }
+                            })
                         )
                         Spacer(Modifier.width(8.dp))
                         if (isGenerating) {
@@ -178,10 +220,11 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                         } else {
                             Button(onClick = { 
                                 val txt = input.trim()
-                                if (txt.isNotEmpty()) { vm.sendMessage(txt); input = "" } 
+                                if (txt.isNotEmpty()) { haptic.performHapticFeedback(HapticFeedbackType.LongPress); vm.sendMessage(txt); input = "" } 
                             }) { Text("Send") }
                         }
                     }
+                    Text("${input.length} karakter | ~${input.length / 4} token", style = MaterialTheme.typography.labelSmall, color = Color.Gray, modifier = Modifier.padding(start = 48.dp))
                 }
             }
         }
@@ -189,24 +232,40 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
 }
 
 @Composable
-fun MessageBubble(msg: ChatMessage, context: Context, tts: TextToSpeech?, isStreaming: Boolean = false, onRegenerate: () -> Unit = {}) {
+fun TypingIndicator() {
+    val infiniteTransition = rememberInfiniteTransition()
+    val dot1 by infiniteTransition.animateFloat(initialValue = 0.2f, targetValue = 1f, animationSpec = infiniteRepeatable(tween(500), RepeatMode.Reverse))
+    val dot2 by infiniteTransition.animateFloat(initialValue = 0.2f, targetValue = 1f, animationSpec = infiniteRepeatable(tween(500, delayMillis = 150), RepeatMode.Reverse))
+    val dot3 by infiniteTransition.animateFloat(initialValue = 0.2f, targetValue = 1f, animationSpec = infiniteRepeatable(tween(500, delayMillis = 300), RepeatMode.Reverse))
+    Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Box(Modifier.size(8.dp).background(Color.Gray.copy(alpha = dot1), CircleShape))
+        Box(Modifier.size(8.dp).background(Color.Gray.copy(alpha = dot2), CircleShape))
+        Box(Modifier.size(8.dp).background(Color.Gray.copy(alpha = dot3), CircleShape))
+    }
+}
+
+@Composable
+fun MessageBubble(msg: ChatMessage, context: Context, tts: TextToSpeech?, fontSize: Float, isStreaming: Boolean = false, onRegenerate: () -> Unit = {}) {
     Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = if (msg.role == "user") Arrangement.End else Arrangement.Start) {
-        Card(colors = CardDefaults.cardColors(containerColor = if (msg.role == "user") Color(0xFF2C3E50) else Color(0xFF141A29)), modifier = Modifier.widthIn(max = 320.dp)) {
+        Card(colors = CardDefaults.cardColors(containerColor = if (msg.role == "user") MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface), modifier = Modifier.widthIn(max = 320.dp)) {
             Column(Modifier.padding(12.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text(text = if (msg.role == "user") "You" else "Winkerly", fontWeight = FontWeight.Bold, color = if (msg.role == "user") Color(0xFF7C9CFF) else MaterialTheme.colorScheme.primary)
+                    Text(text = if (msg.role == "user") "You" else "Winkerly", fontWeight = FontWeight.Bold, color = if (msg.role == "user") MaterialTheme.colorScheme.primary else Color.White)
                     if (msg.role == "assistant" && !isStreaming) {
                         Row {
                             IconButton(onClick = { tts?.speak(msg.content, TextToSpeech.QUEUE_FLUSH, null, "") }, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.VolumeUp, contentDescription = "Speak", tint = Color.Gray) }
-                            Spacer(Modifier.width(4.dp))
                             IconButton(onClick = { (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Winkerly", msg.content)) }, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = Color.Gray) }
-                            Spacer(Modifier.width(4.dp))
                             IconButton(onClick = onRegenerate, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.Refresh, contentDescription = "Regenerate", tint = Color.Gray) }
                         }
                     }
                 }
                 Spacer(Modifier.height(4.dp))
-                if (msg.role == "user") Text(msg.content, color = Color.White) else MarkdownText(msg.content)
+                if (msg.role == "user") {
+                    Text(msg.content, color = Color.White, fontSize = fontSize.sp)
+                } else {
+                    // Menggunakan MarkdownText dengan ukuran font dinamis
+                    MarkdownText(msg.content, fontSize)
+                }
             }
         }
     }
