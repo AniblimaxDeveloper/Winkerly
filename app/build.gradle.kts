@@ -45,7 +45,7 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
-    implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.34.0")
+    implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.28.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
     
     // Networking
