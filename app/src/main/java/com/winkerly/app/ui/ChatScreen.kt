@@ -1,21 +1,25 @@
 package com.winkerly.app.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.winkerly.app.data.db.ChatMessage
 import com.winkerly.app.ui.components.MarkdownText
 import com.winkerly.app.ui.viewmodel.ChatViewModel
 import kotlinx.coroutines.launch
@@ -25,11 +29,23 @@ import kotlinx.coroutines.launch
 fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val listState = rememberLazyListState()
+
     val sessions by vm.allSessions.collectAsState()
     val messages by vm.activeMessages.collectAsState()
     val activeId by vm.activeSessionId.collectAsState()
+    val isGenerating by vm.isGenerating.collectAsState()
+    val streamingText by vm.streamingText.collectAsState()
     
     var input by remember { mutableStateOf("") }
+
+    // Auto scroll ke bawah saat ada pesan baru atau sedang streaming
+    LaunchedEffect(messages.size, streamingText) {
+        if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(if (isGenerating) messages.size else messages.size - 1)
+        }
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -38,7 +54,7 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                 Text("Riwayat Chat", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleLarge)
                 Button(
                     onClick = { 
-                        vm.createNewSession { }
+                        vm.createNewSession()
                         scope.launch { drawerState.close() }
                     }, 
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
@@ -51,10 +67,15 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                 LazyColumn {
                     items(sessions) { session ->
                         ListItem(
-                            headlineContent = { Text(session.title) },
+                            headlineContent = { Text(session.title, maxLines = 1) },
                             modifier = Modifier.clickable {
                                 vm.selectSession(session.id)
                                 scope.launch { drawerState.close() }
+                            },
+                            trailingContent = {
+                                IconButton(onClick = { vm.deleteSession(session.id) }) {
+                                    Icon(Icons.Default.Delete, contentDescription = "Hapus", tint = Color.Gray)
+                                }
                             },
                             colors = ListItemDefaults.colors(
                                 containerColor = if (session.id == activeId) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent
@@ -83,38 +104,18 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
             }
         ) { padding ->
             Column(Modifier.padding(padding).fillMaxSize().background(Color(0xFF0B0F19))) {
-                // Jika belum ada chat terpilih
                 if (activeId == null) {
                     Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        Text("Klik ikon menu (kiri atas) lalu pilih 'Chat Baru'", color = Color.Gray)
+                        Text("Buat 'Chat Baru' untuk memulai", color = Color.Gray)
                     }
                 } else {
-                    LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(12.dp)) {
+                    LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().padding(12.dp)) {
                         items(messages) { msg ->
-                            Row(
-                                Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                                horizontalArrangement = if (msg.role == "user") Arrangement.End else Arrangement.Start
-                            ) {
-                                Card(
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = if (msg.role == "user") Color(0xFF2C3E50) else Color(0xFF141A29)
-                                    ),
-                                    modifier = Modifier.widthIn(max = 300.dp)
-                                ) {
-                                    Column(Modifier.padding(12.dp)) {
-                                        Text(
-                                            text = if (msg.role == "user") "You" else "Winkerly",
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (msg.role == "user") Color(0xFF7C9CFF) else Color.White
-                                        )
-                                        Spacer(Modifier.height(4.dp))
-                                        if (msg.role == "user") {
-                                            Text(msg.content, color = Color.White)
-                                        } else {
-                                            MarkdownText(msg.content)
-                                        }
-                                    }
-                                }
+                            MessageBubble(msg, context)
+                        }
+                        if (isGenerating) {
+                            item {
+                                MessageBubble(ChatMessage(role = "assistant", content = streamingText.ifEmpty { "..." }), context, isStreaming = true)
                             }
                         }
                     }
@@ -128,15 +129,58 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                         placeholder = { Text("Message Winkerly...") }
                     )
                     Spacer(Modifier.width(8.dp))
-                    Button(
-                        onClick = {
+                    if (isGenerating) {
+                        Button(onClick = { vm.stopGeneration() }, colors = ButtonDefaults.buttonColors(containerColor = Color.Red)) { 
+                            Icon(Icons.Default.Stop, contentDescription = "Stop")
+                        }
+                    } else {
+                        Button(onClick = {
                             val txt = input.trim()
                             if (txt.isNotEmpty()) {
                                 vm.sendMessage(txt)
                                 input = ""
                             }
+                        }) { Text("Send") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun MessageBubble(msg: ChatMessage, context: Context, isStreaming: Boolean = false) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        horizontalArrangement = if (msg.role == "user") Arrangement.End else Arrangement.Start
+    ) {
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = if (msg.role == "user") Color(0xFF2C3E50) else Color(0xFF141A29)
+            ),
+            modifier = Modifier.widthIn(max = 320.dp)
+        ) {
+            Column(Modifier.padding(12.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = if (msg.role == "user") "You" else "Winkerly",
+                        fontWeight = FontWeight.Bold,
+                        color = if (msg.role == "user") Color(0xFF7C9CFF) else Color.White
+                    )
+                    if (msg.role == "assistant" && !isStreaming) {
+                        IconButton(onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clipboard.setPrimaryClip(ClipData.newPlainText("Winkerly", msg.content))
+                        }, modifier = Modifier.size(24.dp)) {
+                            Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = Color.Gray)
                         }
-                    ) { Text("Send") }
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+                if (msg.role == "user") {
+                    Text(msg.content, color = Color.White)
+                } else {
+                    MarkdownText(msg.content)
                 }
             }
         }

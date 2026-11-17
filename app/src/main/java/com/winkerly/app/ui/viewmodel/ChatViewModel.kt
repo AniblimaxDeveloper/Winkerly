@@ -8,6 +8,7 @@ import com.winkerly.app.data.db.ChatMessage
 import com.winkerly.app.data.db.ChatSession
 import com.winkerly.app.data.prefs.SettingsManager
 import com.winkerly.app.net.AiClient
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -19,6 +20,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val apiKey = settingsManager.apiKey.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "")
     val baseUrl = settingsManager.baseUrl.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "")
     val modelId = settingsManager.modelId.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "")
+    val systemPrompt = settingsManager.systemPrompt.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "")
 
     val allSessions = dao.getAllSessions().stateIn(viewModelScope, SharingStarted.WhileSubscribed(), emptyList())
     
@@ -29,65 +31,92 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         if (id == null) flowOf(emptyList()) else dao.getMessagesForSession(id)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), emptyList())
 
-    private var streamingJob: kotlinx.coroutines.Job? = null
+    private var streamingJob: Job? = null
+    private val _isGenerating = MutableStateFlow(false)
+    val isGenerating = _isGenerating.asStateFlow()
 
-    fun saveSettings(key: String, url: String, model: String) {
-        viewModelScope.launch { settingsManager.saveSettings(key, url, model) }
+    // State sementara untuk render teks yang sedang di-stream
+    private val _streamingText = MutableStateFlow("")
+    val streamingText = _streamingText.asStateFlow()
+
+    fun saveSettings(key: String, url: String, model: String, prompt: String) {
+        viewModelScope.launch { settingsManager.saveSettings(key, url, model, prompt) }
     }
 
-    fun createNewSession(onCreated: (Long) -> Unit) {
+    fun createNewSession() {
         viewModelScope.launch {
             val id = dao.insertSession(ChatSession(title = "New Chat"))
             _activeSessionId.value = id
-            onCreated(id)
+            _streamingText.value = ""
+            _isGenerating.value = false
         }
     }
 
-    fun selectSession(id: Long) { _activeSessionId.value = id }
+    fun selectSession(id: Long) {
+        stopGeneration()
+        _activeSessionId.value = id
+        _streamingText.value = ""
+    }
+
+    fun deleteSession(id: Long) {
+        viewModelScope.launch {
+            dao.deleteMessagesForSession(id)
+            dao.deleteSessionById(id)
+            if (_activeSessionId.value == id) {
+                _activeSessionId.value = null
+            }
+        }
+    }
+
+    fun stopGeneration() {
+        streamingJob?.cancel()
+        _isGenerating.value = false
+    }
 
     fun sendMessage(text: String) {
         val currentId = _activeSessionId.value ?: return
-        if (text.isBlank()) return
+        if (text.isBlank() || _isGenerating.value) return
 
-        viewModelScope.launch {
-            // Simpan pesan user
+        _isGenerating.value = true
+        _streamingText.value = ""
+
+        streamingJob = viewModelScope.launch {
             val userMsg = ChatMessage(sessionId = currentId, role = "user", content = text)
             dao.insertMessage(userMsg)
 
-            // Jika ini pesan pertama, update judul session
             val currentMsgs = activeMessages.value
             if (currentMsgs.isEmpty()) {
                 dao.updateSessionTitle(currentId, if (text.length > 25) text.take(25) + "..." else text)
             }
 
-            // Placeholder untuk AI
-            val aiPlaceholder = ChatMessage(sessionId = currentId, role = "assistant", content = "")
-            dao.insertMessage(aiPlaceholder)
-            val aiMsgId = aiPlaceholder.id
+            // Persiapkan history dengan System Prompt
+            val history = mutableListOf<Pair<String, String>>()
+            if (systemPrompt.value.isNotBlank()) {
+                history.add("system" to systemPrompt.value)
+            }
+            (currentMsgs + userMsg).forEach { history.add(it.role to it.content) }
 
-            // Persiapkan history untuk API
-            val history = (currentMsgs + userMsg).map { it.role to it.content }
             val client = AiClient(baseUrl.value, apiKey.value, modelId.value)
             val fullResponse = StringBuilder()
 
-            // Stream API
             client.streamChat(history,
                 onToken = { token ->
                     fullResponse.append(token)
-                    // Update UI secara instan (karena Room Flow, kita bisa update DB setiap token, tapi ini bisa memberatkan I/O)
-                    // Di production, kita pakai buffer UI. Untuk simplifikasi ini, kita update UI state lokal.
+                    _streamingText.value = fullResponse.toString()
                 },
                 onError = { err ->
+                    _isGenerating.value = false
                     viewModelScope.launch {
-                        // Hapus placeholder dan ganti dengan error
                         dao.insertMessage(ChatMessage(sessionId = currentId, role = "assistant", content = "Error: $err"))
+                        _streamingText.value = ""
                     }
                 },
                 onDone = {
-                    // Simpan jawaban final ke database
+                    _isGenerating.value = false
                     viewModelScope.launch {
-                        // Untuk MVP UI streaming sederhana, kita hapus placeholder kosong dan masukkan teks final
-                        // (Karena Room insert tidak bisa "update" secara langsung tanpa DAO @Update, kita biarkan UI yang menangani render sementara)
+                        // Simpan hasil final ke Room Database
+                        dao.insertMessage(ChatMessage(sessionId = currentId, role = "assistant", content = fullResponse.toString()))
+                        _streamingText.value = ""
                     }
                 }
             )
