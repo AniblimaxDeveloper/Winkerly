@@ -24,6 +24,7 @@ android {
     }
     buildTypes {
         release {
+            isCrunchPngs = false
             isMinifyEnabled = false
             signingConfig = signingConfigs.getByName("release")
         }
