@@ -9,16 +9,32 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 class AiClient(
-    private val baseUrl: String, private val apiKey: String, private val model: String,
-    private val temperature: Float = 0.7f, private val maxTokens: Int = 2048
+    private val baseUrl: String, 
+    private val apiKey: String, 
+    private val model: String,
+    private val temperature: Float = 0.7f, 
+    private val maxTokens: Int = 2048,
+    private val topP: Float = 1.0f,
+    private val freqPenalty: Float = 0.0f,
+    private val presPenalty: Float = 0.0f
 ) {
     private val client = OkHttpClient.Builder().connectTimeout(30, TimeUnit.SECONDS).readTimeout(5, TimeUnit.MINUTES).build()
 
     fun streamChat(history: List<Pair<String, String>>, onToken: (String) -> Unit, onError: (String) -> Unit, onDone: () -> Unit) {
         val messages = JSONArray()
         history.forEach { (role, content) -> messages.put(JSONObject().put("role", role).put("content", content)) }
-        val body = JSONObject().put("model", model).put("messages", messages).put("stream", true)
-            .put("temperature", temperature).put("max_tokens", maxTokens).toString().toRequestBody("application/json".toMediaType())
+        
+        val body = JSONObject()
+            .put("model", model)
+            .put("messages", messages)
+            .put("stream", true)
+            .put("temperature", temperature)
+            .put("max_tokens", maxTokens)
+            .put("top_p", topP)
+            .put("frequency_penalty", freqPenalty)
+            .put("presence_penalty", presPenalty)
+            .toString()
+            .toRequestBody("application/json".toMediaType())
 
         val request = Request.Builder().url("${baseUrl.trimEnd('/')}/chat/completions")
             .addHeader("Authorization", "Bearer $apiKey").addHeader("Content-Type", "application/json").post(body).build()

@@ -21,8 +21,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val baseUrl = settingsManager.baseUrl.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "")
     val modelId = settingsManager.modelId.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "")
     val systemPrompt = settingsManager.systemPrompt.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "")
-    val accentColor = settingsManager.accentColor.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "#7C9CFF")
+    val accentColor = settingsManager.accentColor.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "#10A37F")
     val temperature = settingsManager.temperature.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 0.7f)
+    val topP = settingsManager.topP.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 1.0f)
+    val freqPenalty = settingsManager.freqPenalty.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 0.0f)
+    val presPenalty = settingsManager.presPenalty.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 0.0f)
     val maxTokens = settingsManager.maxTokens.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 2048f)
     val fontSize = settingsManager.fontSize.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 16f)
     val ttsSpeed = settingsManager.ttsSpeed.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 1.0f)
@@ -30,7 +33,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val hapticEnabled = settingsManager.hapticEnabled.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), true)
     val autoCopy = settingsManager.autoCopy.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), false)
     val darkMode = settingsManager.darkMode.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), true)
-    val appLock = settingsManager.appLock.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), false)
 
     val allSessions = dao.getAllSessions().stateIn(viewModelScope, SharingStarted.WhileSubscribed(), emptyList())
     
@@ -61,8 +63,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun setSearchQuery(query: String) { _searchQuery.value = query }
     fun clearError() { _errorMessage.value = null }
 
-    fun saveSettings(key: String, url: String, model: String, prompt: String, color: String, temp: Float, tokens: Float, font: Float, speed: Float, pitch: Float, haptic: Boolean, autoCopy: Boolean, dark: Boolean, lock: Boolean) {
-        viewModelScope.launch { settingsManager.saveSettings(key, url, model, prompt, color, temp, tokens, font, speed, pitch, haptic, autoCopy, dark, lock) }
+    fun saveSettings(
+        key: String, url: String, model: String, prompt: String, color: String, 
+        temp: Float, topP: Float, freq: Float, pres: Float, tokens: Float, 
+        font: Float, speed: Float, pitch: Float, haptic: Boolean, autoCopy: Boolean, dark: Boolean
+    ) {
+        viewModelScope.launch { 
+            settingsManager.saveSettings(key, url, model, prompt, color, temp, topP, freq, pres, tokens, font, speed, pitch, haptic, autoCopy, dark) 
+        }
     }
 
     fun createNewSession() {
@@ -117,7 +125,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             activeMessages.value.forEach { history.add(it.role to it.content) }
 
             val selectedModel = overrideModel ?: modelId.value
-            val client = AiClient(baseUrl.value, apiKey.value, selectedModel, temperature.value, maxTokens.value.toInt())
+            val client = AiClient(
+                baseUrl.value, apiKey.value, selectedModel, 
+                temperature.value, maxTokens.value.toInt(), 
+                topP.value, freqPenalty.value, presPenalty.value
+            )
             val fullResponse = StringBuilder()
 
             client.streamChat(history,
