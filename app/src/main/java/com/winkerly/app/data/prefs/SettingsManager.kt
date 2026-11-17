@@ -14,6 +14,7 @@ val Context.dataStore by preferencesDataStore(name = "winkerly_settings")
 class SettingsManager(private val context: Context) {
     companion object {
         val API_KEY = stringPreferencesKey("api_key")
+        val BASE_URL = stringPreferencesKey("base_url")
         val MODEL_ID = stringPreferencesKey("model_id")
         val SYSTEM_PROMPT = stringPreferencesKey("system_prompt")
         val ACCENT_COLOR = stringPreferencesKey("accent_color")
@@ -24,9 +25,12 @@ class SettingsManager(private val context: Context) {
         val TTS_PITCH = floatPreferencesKey("tts_pitch")
         val HAPTIC_ENABLED = booleanPreferencesKey("haptic_enabled")
         val AUTO_COPY = booleanPreferencesKey("auto_copy")
+        val DARK_MODE = booleanPreferencesKey("dark_mode")
+        val APP_LOCK = booleanPreferencesKey("app_lock")
     }
 
     val apiKey: Flow<String> = context.dataStore.data.map { it[API_KEY] ?: "" }
+    val baseUrl: Flow<String> = context.dataStore.data.map { it[BASE_URL] ?: "https://openrouter.ai/api/v1" }
     val modelId: Flow<String> = context.dataStore.data.map { it[MODEL_ID] ?: "openrouter/free" }
     val systemPrompt: Flow<String> = context.dataStore.data.map { it[SYSTEM_PROMPT] ?: "You are Winkerly." }
     val accentColor: Flow<String> = context.dataStore.data.map { it[ACCENT_COLOR] ?: "#7C9CFF" }
@@ -37,13 +41,17 @@ class SettingsManager(private val context: Context) {
     val ttsPitch: Flow<Float> = context.dataStore.data.map { it[TTS_PITCH] ?: 1.0f }
     val hapticEnabled: Flow<Boolean> = context.dataStore.data.map { it[HAPTIC_ENABLED] ?: true }
     val autoCopy: Flow<Boolean> = context.dataStore.data.map { it[AUTO_COPY] ?: false }
+    val darkMode: Flow<Boolean> = context.dataStore.data.map { it[DARK_MODE] ?: true }
+    val appLock: Flow<Boolean> = context.dataStore.data.map { it[APP_LOCK] ?: false }
 
     suspend fun saveSettings(
-        key: String, model: String, prompt: String, color: String, 
-        temp: Float, tokens: Float, font: Float, speed: Float, pitch: Float, haptic: Boolean, autoCopy: Boolean
+        key: String, url: String, model: String, prompt: String, color: String, 
+        temp: Float, tokens: Float, font: Float, speed: Float, pitch: Float, 
+        haptic: Boolean, autoCopy: Boolean, dark: Boolean, lock: Boolean
     ) {
         context.dataStore.edit { prefs ->
             prefs[API_KEY] = key
+            prefs[BASE_URL] = url
             prefs[MODEL_ID] = model
             prefs[SYSTEM_PROMPT] = prompt
             prefs[ACCENT_COLOR] = color
@@ -54,6 +62,8 @@ class SettingsManager(private val context: Context) {
             prefs[TTS_PITCH] = pitch
             prefs[HAPTIC_ENABLED] = haptic
             prefs[AUTO_COPY] = autoCopy
+            prefs[DARK_MODE] = dark
+            prefs[APP_LOCK] = lock
         }
     }
 }

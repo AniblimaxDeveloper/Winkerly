@@ -62,6 +62,7 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
 
     var input by remember { mutableStateOf("") }
     var autoScroll by remember { mutableStateOf(true) }
+    var selectedMessageForSheet by remember { mutableStateOf<ChatMessage?>(null) }
 
     val speechLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
@@ -77,8 +78,29 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
     DisposableEffect(Unit) { onDispose { tts?.stop(); tts?.shutdown() } }
 
     LaunchedEffect(messages.size, streamingText) {
-        if (autoScroll && messages.isNotEmpty()) {
-            listState.animateScrollToItem(if (isGenerating) messages.size else messages.size - 1)
+        if (autoScroll && messages.isNotEmpty()) listState.animateScrollToItem(if (isGenerating) messages.size else messages.size - 1)
+    }
+
+    if (selectedMessageForSheet != null) {
+        ModalBottomSheet(onDismissRequest = { selectedMessageForSheet = null }) {
+            Column(Modifier.padding(16.dp)) {
+                Text("Opsi Pesan", style = MaterialTheme.typography.titleLarge)
+                Spacer(Modifier.height(16.dp))
+                Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
+                    IconButton(onClick = { tts?.speak(selectedMessageForSheet?.content, TextToSpeech.QUEUE_FLUSH, null, ""); selectedMessageForSheet = null }) { Icon(Icons.Default.VolumeUp, contentDescription = "TTS") }
+                    IconButton(onClick = { 
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Winkerly", selectedMessageForSheet?.content))
+                        selectedMessageForSheet = null 
+                    }) { Icon(Icons.Default.ContentCopy, contentDescription = "Copy") }
+                    IconButton(onClick = { 
+                        val sendIntent = Intent().apply { action = Intent.ACTION_SEND; putExtra(Intent.EXTRA_TEXT, selectedMessageForSheet?.content); type = "text/plain" }
+                        context.startActivity(Intent.createChooser(sendIntent, "Share Message")); selectedMessageForSheet = null 
+                    }) { Icon(Icons.Default.Share, contentDescription = "Share") }
+                    IconButton(onClick = { vm.regenerateLastMessage(); selectedMessageForSheet = null }) { Icon(Icons.Default.Refresh, contentDescription = "Regenerate") }
+                }
+                Spacer(Modifier.height(32.dp))
+            }
         }
     }
 
@@ -93,9 +115,7 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                 )
                 Spacer(Modifier.height(8.dp))
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Button(onClick = { vm.createNewSession(); scope.launch { drawerState.close() } }, modifier = Modifier.weight(1f)) {
-                        Icon(Icons.Default.Add, contentDescription = null); Spacer(Modifier.width(4.dp)); Text("Baru")
-                    }
+                    Button(onClick = { vm.createNewSession(); scope.launch { drawerState.close() } }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Add, contentDescription = null); Spacer(Modifier.width(4.dp)); Text("Baru") }
                     Spacer(Modifier.width(8.dp))
                     OutlinedButton(onClick = { vm.deleteAllSessions() }) { Icon(Icons.Default.DeleteSweep, contentDescription = null, tint = Color.Red) }
                 }
@@ -105,12 +125,14 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                         ListItem(
                             headlineContent = { Text(session.title, maxLines = 1) },
                             modifier = Modifier.clickable { vm.selectSession(session.id); scope.launch { drawerState.close() } },
+                            leadingContent = { if (session.isPinned) Icon(Icons.Default.PushPin, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
                             trailingContent = {
                                 var showMenu by remember { mutableStateOf(false) }
                                 Box {
                                     IconButton(onClick = { showMenu = true }) { Icon(Icons.Default.MoreVert, contentDescription = null) }
                                     DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                                        DropdownMenuItem(text = { Text("Rename") }, onClick = { vm.renameSession(session.id, "Renamed Chat"); showMenu = false })
+                                        DropdownMenuItem(text = { Text(if (session.isPinned) "Unpin" else "Pin") }, onClick = { vm.togglePinSession(session.id, session.isPinned); showMenu = false })
+                                        DropdownMenuItem(text = { Text("Rename") }, onClick = { vm.renameSession(session.id, "Renamed"); showMenu = false })
                                         DropdownMenuItem(text = { Text("Hapus") }, onClick = { vm.deleteSession(session.id); showMenu = false })
                                     }
                                 }
@@ -125,14 +147,14 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
         Scaffold(
             topBar = {
                 TopAppBar(
-                    title = { Text("Winkerly Max") },
+                    title = { Text("Winkerly Infinity") },
                     navigationIcon = { IconButton(onClick = { scope.launch { drawerState.open() } }) { Icon(Icons.Default.Menu, contentDescription = null) } },
                     actions = {
                         if (messages.isNotEmpty()) {
                             IconButton(onClick = {
                                 val shareText = messages.joinToString("\n\n") { "${if (it.role == "user") "You" else "Winkerly"}: ${it.content}" }
                                 val sendIntent = Intent().apply { action = Intent.ACTION_SEND; putExtra(Intent.EXTRA_TEXT, shareText); type = "text/plain" }
-                                context.startActivity(Intent.createChooser(sendIntent, "Export JSON/TXT"))
+                                context.startActivity(Intent.createChooser(sendIntent, "Export Chat"))
                             }) { Icon(Icons.Default.Share, contentDescription = "Share") }
                         }
                         IconButton(onClick = { autoScroll = !autoScroll }) { Icon(if (autoScroll) Icons.Default.VerticalAlignBottom else Icons.Default.Pause, contentDescription = "Auto Scroll") }
@@ -143,12 +165,8 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
             floatingActionButton = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (listState.firstVisibleItemIndex > 3) {
-                        FloatingActionButton(onClick = { scope.launch { listState.animateScrollToItem(0) } }, containerColor = MaterialTheme.colorScheme.surfaceVariant, contentColor = Color.White, shape = CircleShape, modifier = Modifier.size(40.dp)) {
-                            Icon(Icons.Default.KeyboardArrowUp, contentDescription = null)
-                        }
-                        FloatingActionButton(onClick = { scope.launch { listState.animateScrollToItem(messages.size) } }, containerColor = MaterialTheme.colorScheme.primary, contentColor = Color.White, shape = CircleShape, modifier = Modifier.size(40.dp)) {
-                            Icon(Icons.Default.KeyboardArrowDown, contentDescription = null)
-                        }
+                        FloatingActionButton(onClick = { scope.launch { listState.animateScrollToItem(0) } }, containerColor = MaterialTheme.colorScheme.surfaceVariant, contentColor = Color.White, shape = CircleShape, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.KeyboardArrowUp, contentDescription = null) }
+                        FloatingActionButton(onClick = { scope.launch { listState.animateScrollToItem(messages.size) } }, containerColor = MaterialTheme.colorScheme.primary, contentColor = Color.White, shape = CircleShape, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.KeyboardArrowDown, contentDescription = null) }
                     }
                 }
             }
@@ -158,11 +176,13 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                     Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { Text("Mulai chat baru untuk melihat keajaiban Winkerly.", color = Color.Gray) }
                 } else {
                     LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().padding(12.dp)) {
-                        items(messages) { msg -> MessageBubble(msg, context, tts, fontSize, autoCopy, onRegenerate = { vm.regenerateLastMessage() }) }
+                        items(messages) { msg -> 
+                            MessageBubble(msg, context, fontSize, autoCopy) { selectedMessageForSheet = msg }
+                        }
                         if (isGenerating) {
                             item {
                                 if (streamingText.isEmpty()) TypingIndicator()
-                                else MessageBubble(ChatMessage(sessionId = activeId ?: 0L, role = "assistant", content = streamingText, timestamp = System.currentTimeMillis()), context, tts, fontSize, false, isStreaming = true)
+                                else MessageBubble(ChatMessage(sessionId = activeId ?: 0L, role = "assistant", content = streamingText, timestamp = System.currentTimeMillis()), context, fontSize, false, {}) 
                             }
                         }
                     }
@@ -214,8 +234,9 @@ fun TypingIndicator() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MessageBubble(msg: ChatMessage, context: Context, tts: TextToSpeech?, fontSize: Float, autoCopy: Boolean, isStreaming: Boolean = false, onRegenerate: () -> Unit = {}) {
+fun MessageBubble(msg: ChatMessage, context: Context, fontSize: Float, autoCopy: Boolean, onLongPress: () -> Unit, isStreaming: Boolean = false) {
     val formatter = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
     val timeString = formatter.format(Date(msg.timestamp))
 
@@ -224,53 +245,45 @@ fun MessageBubble(msg: ChatMessage, context: Context, tts: TextToSpeech?, fontSi
         clipboard.setPrimaryClip(ClipData.newPlainText("Winkerly", msg.content))
     }
 
-    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = if (msg.role == "user") Arrangement.End else Arrangement.Start) {
-        if (msg.role != "user") {
-            Box(Modifier.size(32.dp).background(MaterialTheme.colorScheme.primary, CircleShape), contentAlignment = Alignment.Center) {
-                Text("W", color = Color.White, fontWeight = FontWeight.Bold)
-            }
-            Spacer(Modifier.width(8.dp))
-        }
+    val dismissState = rememberSwipeToDismissBoxState()
 
-        Card(colors = CardDefaults.cardColors(containerColor = if (msg.role == "user") MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface), modifier = Modifier.widthIn(max = 300.dp)) {
-            Column(Modifier.padding(12.dp)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text(text = if (msg.role == "user") "You" else "Winkerly", fontWeight = FontWeight.Bold, color = if (msg.role == "user") MaterialTheme.colorScheme.primary else Color.White, fontSize = 12.sp)
-                    Text(timeString, color = Color.Gray, fontSize = 10.sp)
+    SwipeToDismissBox(
+        state = dismissState,
+        backgroundContent = {
+            Box(Modifier.fillMaxSize().background(Color.Red, shape = MaterialTheme.shapes.medium), contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.Delete, contentDescription = "Hapus", tint = Color.White)
+            }
+        },
+        content = {
+            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp).clickable(onClick = onLongPress), horizontalArrangement = if (msg.role == "user") Arrangement.End else Arrangement.Start) {
+                if (msg.role != "user") {
+                    Box(Modifier.size(32.dp).background(MaterialTheme.colorScheme.primary, CircleShape), contentAlignment = Alignment.Center) { Text("W", color = Color.White, fontWeight = FontWeight.Bold) }
+                    Spacer(Modifier.width(8.dp))
                 }
-                Spacer(Modifier.height(4.dp))
-                
-                SelectionContainer {
-                    if (msg.role == "user") {
-                        Text(msg.content, color = Color.White, fontSize = fontSize.sp)
-                    } else {
-                        MarkdownText(msg.content, fontSize)
+
+                Card(colors = CardDefaults.cardColors(containerColor = if (msg.role == "user") MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface), modifier = Modifier.widthIn(max = 300.dp)) {
+                    Column(Modifier.padding(12.dp)) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Text(text = if (msg.role == "user") "You" else "Winkerly", fontWeight = FontWeight.Bold, color = if (msg.role == "user") MaterialTheme.colorScheme.primary else Color.White, fontSize = 12.sp)
+                            Text(timeString, color = Color.Gray, fontSize = 10.sp)
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        
+                        SelectionContainer {
+                            if (msg.role == "user") {
+                                Text(msg.content, color = Color.White, fontSize = fontSize.sp)
+                            } else {
+                                MarkdownText(msg.content, fontSize)
+                            }
+                        }
                     }
                 }
 
-                if (msg.role == "assistant" && !isStreaming) {
-                    Spacer(Modifier.height(8.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        IconButton(onClick = { tts?.speak(msg.content, TextToSpeech.QUEUE_FLUSH, null, "") }, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.VolumeUp, contentDescription = "Speak", tint = Color.Gray) }
-                        Spacer(Modifier.width(8.dp))
-                        IconButton(onClick = { (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Winkerly", msg.content)) }, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = Color.Gray) }
-                        Spacer(Modifier.width(8.dp))
-                        IconButton(onClick = {
-                            val sendIntent = Intent().apply { action = Intent.ACTION_SEND; putExtra(Intent.EXTRA_TEXT, msg.content); type = "text/plain" }
-                            context.startActivity(Intent.createChooser(sendIntent, "Share Message"))
-                        }, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.Share, contentDescription = "Share", tint = Color.Gray) }
-                        Spacer(Modifier.width(8.dp))
-                        IconButton(onClick = onRegenerate, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.Refresh, contentDescription = "Regenerate", tint = Color.Gray) }
-                    }
+                if (msg.role == "user") {
+                    Spacer(Modifier.width(8.dp))
+                    Box(Modifier.size(32.dp).background(MaterialTheme.colorScheme.secondary, CircleShape), contentAlignment = Alignment.Center) { Text("U", color = Color.White, fontWeight = FontWeight.Bold) }
                 }
             }
         }
-
-        if (msg.role == "user") {
-            Spacer(Modifier.width(8.dp))
-            Box(Modifier.size(32.dp).background(MaterialTheme.colorScheme.secondary, CircleShape), contentAlignment = Alignment.Center) {
-                Text("U", color = Color.White, fontWeight = FontWeight.Bold)
-            }
-        }
-    }
+    )
 }
