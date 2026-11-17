@@ -10,15 +10,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import com.winkerly.app.data.ProviderConfig
 import com.winkerly.app.net.AiClient
 
 @Composable
-fun ChatScreen(onSettings: () -> Unit) {
+fun ChatScreen(
+    apiKey: String,
+    baseUrl: String,
+    model: String,
+    onSettings: () -> Unit
+) {
     val messages = remember { mutableStateListOf<Pair<String, String>>() }
     var input by remember { mutableStateOf("") }
     var streaming by remember { mutableStateOf(false) }
-    val config = remember { ProviderConfig() }
 
     Column(Modifier.fillMaxSize().background(Color(0xFF0B0F19)).padding(12.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -40,7 +43,7 @@ fun ChatScreen(onSettings: () -> Unit) {
                 messages.add("user" to userMsg)
                 messages.add("assistant" to "")
                 streaming = true
-                val client = AiClient(config.baseUrl, config.apiKey, config.model)
+                val client = AiClient(baseUrl, apiKey, model)
                 client.streamChat(history = messages.dropLast(1),
                     onToken = { token -> val last = messages.last(); messages[messages.lastIndex] = last.first to (last.second + token) },
                     onError = { err -> val last = messages.last(); messages[messages.lastIndex] = last.first to "Error: $err"; streaming = false },
