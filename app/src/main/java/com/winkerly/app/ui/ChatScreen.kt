@@ -40,7 +40,6 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
     
     var input by remember { mutableStateOf("") }
 
-    // Auto scroll ke bawah saat ada pesan baru atau sedang streaming
     LaunchedEffect(messages.size, streamingText) {
         if (messages.isNotEmpty()) {
             listState.animateScrollToItem(if (isGenerating) messages.size else messages.size - 1)
@@ -115,13 +114,13 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                         }
                         if (isGenerating) {
                             item {
-                                MessageBubble(ChatMessage(role = "assistant", content = streamingText.ifEmpty { "..." }), context, isStreaming = true)
+                                // PERBAIKAN: Menambahkan sessionId = activeId ?: 0L
+                                MessageBubble(ChatMessage(sessionId = activeId ?: 0L, role = "assistant", content = streamingText.ifEmpty { "..." }), context, isStreaming = true)
                             }
                         }
                     }
                 }
 
-                // Input Bar
                 Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
                         value = input, onValueChange = { input = it },
