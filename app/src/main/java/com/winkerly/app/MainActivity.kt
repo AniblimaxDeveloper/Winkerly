@@ -17,11 +17,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             val vm: ChatViewModel = viewModel()
+            // Default langsung ke layar Chat
             var showSettings by remember { mutableStateOf(false) }
-            val apiKey by vm.apiKey.collectAsState()
-
-            // Jika API Key kosong, paksa buka settings
-            if (apiKey.isBlank()) showSettings = true
 
             MaterialTheme(colorScheme = darkColorScheme(background = Color(0xFF0B0F19), surface = Color(0xFF141A29), primary = Color(0xFF7C9CFF))) {
                 if (showSettings) {
