@@ -21,9 +21,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val baseUrl = settingsManager.baseUrl.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "")
     val modelId = settingsManager.modelId.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "")
     val systemPrompt = settingsManager.systemPrompt.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "")
+    val accentColor = settingsManager.accentColor.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "#7C9CFF")
 
     val allSessions = dao.getAllSessions().stateIn(viewModelScope, SharingStarted.WhileSubscribed(), emptyList())
     
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery = _searchQuery.asStateFlow()
+    
+    val filteredSessions = combine(allSessions, _searchQuery) { sessions, query ->
+        if (query.isBlank()) sessions else sessions.filter { it.title.contains(query, ignoreCase = true) }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), emptyList())
+
     private val _activeSessionId = MutableStateFlow<Long?>(null)
     val activeSessionId = _activeSessionId.asStateFlow()
 
@@ -38,8 +46,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val _streamingText = MutableStateFlow("")
     val streamingText = _streamingText.asStateFlow()
 
-    fun saveSettings(key: String, url: String, model: String, prompt: String) {
-        viewModelScope.launch { settingsManager.saveSettings(key, url, model, prompt) }
+    fun setSearchQuery(query: String) { _searchQuery.value = query }
+
+    fun saveSettings(key: String, url: String, model: String, prompt: String, color: String) {
+        viewModelScope.launch { settingsManager.saveSettings(key, url, model, prompt, color) }
     }
 
     fun createNewSession() {
@@ -88,9 +98,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }
 
             val history = mutableListOf<Pair<String, String>>()
-            if (systemPrompt.value.isNotBlank()) {
-                history.add("system" to systemPrompt.value)
-            }
+            if (systemPrompt.value.isNotBlank()) history.add("system" to systemPrompt.value)
             activeMessages.value.forEach { history.add(it.role to it.content) }
 
             val client = AiClient(baseUrl.value, apiKey.value, modelId.value)
@@ -123,11 +131,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val msgs = activeMessages.value
         if (msgs.isNotEmpty() && msgs.last().role == "assistant") {
             val lastUserMsg = msgs.findLast { it.role == "user" } ?: return
-            viewModelScope.launch {
-                // Dalam implementasi nyata, Anda harus menghapus pesan AI terakhir dari DB
-                // Untuk simplifikasi, kita kirim ulang prompt terakhir
-                sendMessage(lastUserMsg.content, isRegenerate = true)
-            }
+            viewModelScope.launch { sendMessage(lastUserMsg.content, isRegenerate = true) }
         }
     }
 }

@@ -15,19 +15,22 @@ class SettingsManager(private val context: Context) {
         val BASE_URL = stringPreferencesKey("base_url")
         val MODEL_ID = stringPreferencesKey("model_id")
         val SYSTEM_PROMPT = stringPreferencesKey("system_prompt")
+        val ACCENT_COLOR = stringPreferencesKey("accent_color")
     }
 
     val apiKey: Flow<String> = context.dataStore.data.map { it[API_KEY] ?: "" }
     val baseUrl: Flow<String> = context.dataStore.data.map { it[BASE_URL] ?: "https://openrouter.ai/api/v1" }
     val modelId: Flow<String> = context.dataStore.data.map { it[MODEL_ID] ?: "openrouter/free" }
-    val systemPrompt: Flow<String> = context.dataStore.data.map { it[SYSTEM_PROMPT] ?: "You are Winkerly, a highly capable, intelligent, and professional AI assistant." }
+    val systemPrompt: Flow<String> = context.dataStore.data.map { it[SYSTEM_PROMPT] ?: "You are Winkerly, a helpful AI." }
+    val accentColor: Flow<String> = context.dataStore.data.map { it[ACCENT_COLOR] ?: "#7C9CFF" }
 
-    suspend fun saveSettings(key: String, url: String, model: String, prompt: String) {
+    suspend fun saveSettings(key: String, url: String, model: String, prompt: String, color: String) {
         context.dataStore.edit { prefs ->
             prefs[API_KEY] = key
             prefs[BASE_URL] = url
             prefs[MODEL_ID] = model
             prefs[SYSTEM_PROMPT] = prompt
+            prefs[ACCENT_COLOR] = color
         }
     }
 }
