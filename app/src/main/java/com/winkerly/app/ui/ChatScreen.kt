@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField // <-- IMPORT YANG HILANG DITAMBAHKAN DI SINI
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -179,7 +180,8 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                             DropdownMenu(expanded = expandedModelMenu, onDismissRequest = { expandedModelMenu = false }) {
                                 models.forEach { model ->
                                     DropdownMenuItem(text = { Text(model) }, onClick = { 
-                                        vm.saveSettings("", "", model, "", "", 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, true, false, true) // Just to update model logic (will be refined)
+                                        // Update model ID di setting secara lokal untuk UI ini
+                                        vm.saveSettings("", "", model, "", "", 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, true, false, true)
                                         expandedModelMenu = false 
                                     })
                                 }
@@ -239,7 +241,7 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                     }
                 }
 
-                // ChatGPT Style Input Box
+                // ChatGPT Style Input Box (Sudah Diperbaiki)
                 Box(Modifier.fillMaxWidth().padding(12.dp)) {
                     Surface(
                         shape = RoundedCornerShape(24.dp),
