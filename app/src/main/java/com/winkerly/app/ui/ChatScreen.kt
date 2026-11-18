@@ -7,11 +7,11 @@ import android.content.Context
 import android.content.Intent
 import android.speech.RecognizerIntent
 import android.speech.tts.TextToSpeech
+import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -20,8 +20,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -30,18 +28,15 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.winkerly.app.data.db.ChatMessage
-import com.winkerly.app.data.db.ChatSession
 import com.winkerly.app.ui.components.MarkdownText
 import com.winkerly.app.ui.viewmodel.ChatViewModel
 import kotlinx.coroutines.launch
@@ -55,6 +50,7 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
     val listState = rememberLazyListState()
+    val activity = context as Activity
 
     val groupedSessions by vm.groupedSessions.collectAsState()
     val messages by vm.activeMessages.collectAsState()
@@ -72,8 +68,15 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
     var input by remember { mutableStateOf("") }
     var autoScroll by remember { mutableStateOf(true) }
     var expandedModelMenu by remember { mutableStateOf(false) }
+    var editingMessage by remember { mutableStateOf<ChatMessage?>(null) }
     
     val models = listOf("openrouter/free", "google/gemma-2-9b-it:free", "meta-llama/llama-3-8b-instruct:free")
+
+    // Fitur Keep Screen On
+    LaunchedEffect(isGenerating) {
+        if (isGenerating) activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
 
     val speechLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
@@ -90,6 +93,29 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
 
     LaunchedEffect(messages.size, streamingText) {
         if (autoScroll && messages.isNotEmpty()) listState.animateScrollToItem(if (isGenerating) messages.size else messages.size - 1)
+    }
+
+    if (editingMessage != null) {
+        AlertDialog(
+            onDismissRequest = { editingMessage = null },
+            title = { Text("Edit Prompt") },
+            text = {
+                OutlinedTextField(
+                    value = input, onValueChange = { input = it },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.editMessageAndResend(editingMessage!!.id, input)
+                    editingMessage = null
+                    input = ""
+                }) { Text("Save & Resend") }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingMessage = null }) { Text("Cancel") }
+            }
+        )
     }
 
     ModalNavigationDrawer(
@@ -133,6 +159,12 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                                     Box {
                                         IconButton(onClick = { showMenu = true }, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.MoreHoriz, contentDescription = null, tint = Color.Gray) }
                                         DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                                            DropdownMenuItem(text = { Text("Export JSON") }, onClick = { 
+                                                val json = vm.exportCurrentChatToJson()
+                                                val sendIntent = Intent().apply { action = Intent.ACTION_SEND; putExtra(Intent.EXTRA_TEXT, json); type = "text/json" }
+                                                context.startActivity(Intent.createChooser(sendIntent, "Export Chat"))
+                                                showMenu = false 
+                                            })
                                             DropdownMenuItem(text = { Text("Rename") }, onClick = { vm.renameSession(session.id, "Renamed"); showMenu = false })
                                             DropdownMenuItem(text = { Text("Delete") }, onClick = { vm.deleteSession(session.id); showMenu = false })
                                         }
@@ -164,7 +196,7 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                             DropdownMenu(expanded = expandedModelMenu, onDismissRequest = { expandedModelMenu = false }) {
                                 models.forEach { model ->
                                     DropdownMenuItem(text = { Text(model) }, onClick = { 
-                                        vm.saveSettings("", "", model, "", "", 0f, 0f, 0f, 0f, true, false, true)
+                                        vm.saveSettings("", "", model, "", "", 0f, 0f, 0f, 0f, 0f, true, false, "system", false, "")
                                         expandedModelMenu = false 
                                     })
                                 }
@@ -181,7 +213,6 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
         ) { padding ->
             Column(Modifier.padding(padding).fillMaxSize().background(MaterialTheme.colorScheme.background)) {
                 if (activeId == null || (messages.isEmpty() && !isGenerating)) {
-                    // Welcome Screen ala ChatGPT
                     Column(
                         modifier = Modifier.weight(1f).fillMaxWidth().padding(24.dp),
                         verticalArrangement = Arrangement.Center,
@@ -192,7 +223,6 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                         Text("How can I help you today?", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(32.dp))
                         
-                        // Suggestion Cards
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             SuggestionCard("Explain quantum computing in simple terms", Modifier.weight(1f)) { vm.sendMessage(it) }
                             SuggestionCard("Write a Python script to scrape a website", Modifier.weight(1f)) { vm.sendMessage(it) }
@@ -211,7 +241,8 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                                 context = context, 
                                 fontSize = fontSize, 
                                 autoCopy = autoCopy,
-                                onRegenerate = { vm.regenerateLastMessage() }
+                                onRegenerate = { vm.regenerateLastMessage() },
+                                onEdit = { if (msg.role == "user") { input = msg.content; editingMessage = msg } }
                             )
                         }
                         if (isGenerating) {
@@ -223,6 +254,7 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                                     fontSize = fontSize, 
                                     autoCopy = false, 
                                     onRegenerate = {},
+                                    onEdit = {},
                                     isStreaming = true
                                 ) 
                             }
@@ -230,7 +262,6 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                     }
                 }
 
-                // Input Box ala ChatGPT
                 Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
                     Surface(
                         shape = RoundedCornerShape(24.dp),
@@ -239,7 +270,7 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                         border = androidx.compose.foundation.BorderStroke(1.dp, Color.Gray.copy(alpha = 0.2f))
                     ) {
                         Row(Modifier.padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(onClick = { /* Attachment */ }) { Icon(Icons.Default.Add, contentDescription = "Attach", tint = Color.Gray) }
+                            IconButton(onClick = { }) { Icon(Icons.Default.Add, contentDescription = "Attach", tint = Color.Gray) }
                             
                             BasicTextField(
                                 value = input,
@@ -248,9 +279,7 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurfaceVariant),
                                 maxLines = 4,
                                 decorationBox = { innerTextField ->
-                                    if (input.isEmpty()) {
-                                        Text("Message Winkerly...", color = Color.Gray)
-                                    }
+                                    if (input.isEmpty()) Text("Message Winkerly...", color = Color.Gray)
                                     innerTextField()
                                 }
                             )
@@ -301,6 +330,7 @@ fun ChatGPTMessageRow(
     fontSize: Float, 
     autoCopy: Boolean, 
     onRegenerate: () -> Unit,
+    onEdit: () -> Unit,
     isStreaming: Boolean = false
 ) {
     if (autoCopy && msg.role == "assistant" && !isStreaming) {
@@ -332,19 +362,22 @@ fun ChatGPTMessageRow(
                     }
                 }
                 
-                // Action Row (Hanya muncul di bawah pesan AI yang sudah selesai)
-                if (!isUser && !isStreaming) {
+                if (!isStreaming) {
                     Spacer(Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = { 
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            clipboard.setPrimaryClip(ClipData.newPlainText("Winkerly", msg.content)) 
-                        }, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = Color.Gray, modifier = Modifier.size(16.dp)) }
-                        
-                        IconButton(onClick = onRegenerate, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.Refresh, contentDescription = "Regenerate", tint = Color.Gray, modifier = Modifier.size(16.dp)) }
-                        
-                        IconButton(onClick = { }, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.ThumbUp, contentDescription = "Good", tint = Color.Gray, modifier = Modifier.size(16.dp)) }
-                        IconButton(onClick = { }, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.ThumbDown, contentDescription = "Bad", tint = Color.Gray, modifier = Modifier.size(16.dp)) }
+                        if (isUser) {
+                            IconButton(onClick = onEdit, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.Edit, contentDescription = "Edit", tint = Color.Gray, modifier = Modifier.size(16.dp)) }
+                        } else {
+                            IconButton(onClick = { 
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                clipboard.setPrimaryClip(ClipData.newPlainText("Winkerly", msg.content)) 
+                            }, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = Color.Gray, modifier = Modifier.size(16.dp)) }
+                            
+                            IconButton(onClick = onRegenerate, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.Refresh, contentDescription = "Regenerate", tint = Color.Gray, modifier = Modifier.size(16.dp)) }
+                            
+                            IconButton(onClick = { }, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.ThumbUp, contentDescription = "Good", tint = Color.Gray, modifier = Modifier.size(16.dp)) }
+                            IconButton(onClick = { }, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.ThumbDown, contentDescription = "Bad", tint = Color.Gray, modifier = Modifier.size(16.dp)) }
+                        }
                     }
                 }
             }

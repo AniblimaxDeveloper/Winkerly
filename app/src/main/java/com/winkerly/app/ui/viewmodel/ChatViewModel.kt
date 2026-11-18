@@ -11,6 +11,8 @@ import com.winkerly.app.net.AiClient
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.Calendar
 
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
@@ -30,7 +32,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val ttsPitch = settingsManager.ttsPitch.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 1.0f)
     val hapticEnabled = settingsManager.hapticEnabled.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), true)
     val autoCopy = settingsManager.autoCopy.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), false)
-    val darkMode = settingsManager.darkMode.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), true)
+    val themeMode = settingsManager.themeMode.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "system")
+    val appLock = settingsManager.appLock.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), false)
+    val appPin = settingsManager.appPin.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "")
 
     val allSessions = dao.getAllSessions().stateIn(viewModelScope, SharingStarted.WhileSubscribed(), emptyList())
     
@@ -41,7 +45,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         if (query.isBlank()) sessions else sessions.filter { it.title.contains(query, ignoreCase = true) }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), emptyList())
 
-    // Mengelompokkan sesi berdasarkan waktu (Hari ini, Kemarin, 7 Hari Terakhir)
     val groupedSessions = filteredSessions.map { sessions ->
         val todayStart = getStartOfDay(0)
         val yesterdayStart = getStartOfDay(-1)
@@ -91,8 +94,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun setSearchQuery(query: String) { _searchQuery.value = query }
     fun clearError() { _errorMessage.value = null }
 
-    fun saveSettings(key: String, url: String, model: String, prompt: String, color: String, temp: Float, tokens: Float, font: Float, speed: Float, pitch: Float, haptic: Boolean, autoCopy: Boolean, dark: Boolean) {
-        viewModelScope.launch { settingsManager.saveSettings(key, url, model, prompt, color, temp, 1.0f, 0.0f, 0.0f, tokens, font, speed, pitch, haptic, autoCopy, dark) }
+    fun saveSettings(key: String, url: String, model: String, prompt: String, color: String, temp: Float, tokens: Float, font: Float, speed: Float, pitch: Float, haptic: Boolean, autoCopy: Boolean, theme: String, lock: Boolean, pin: String) {
+        viewModelScope.launch { settingsManager.saveSettings(key, url, model, prompt, color, temp, tokens, font, speed, pitch, haptic, autoCopy, theme, lock, pin) }
     }
 
     fun createNewSession() {
@@ -127,6 +130,28 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun stopGeneration() { streamingJob?.cancel(); _isGenerating.value = false }
+
+    fun editMessageAndResend(messageId: Long, newContent: String) {
+        val currentId = _activeSessionId.value ?: return
+        viewModelScope.launch {
+            val msg = activeMessages.value.find { it.id == messageId } ?: return@launch
+            dao.deleteMessagesAfter(currentId, msg.timestamp)
+            dao.updateMessageContent(messageId, newContent)
+            sendMessage(newContent, isRegenerate = true)
+        }
+    }
+
+    fun exportCurrentChatToJson(): String {
+        val msgs = activeMessages.value
+        val jsonArray = JSONArray()
+        msgs.forEach { msg ->
+            val obj = JSONObject()
+            obj.put("role", msg.role)
+            obj.put("content", msg.content)
+            jsonArray.put(obj)
+        }
+        return jsonArray.toString(2)
+    }
 
     fun sendMessage(text: String, isRegenerate: Boolean = false, overrideModel: String? = null) {
         val currentId = _activeSessionId.value ?: return

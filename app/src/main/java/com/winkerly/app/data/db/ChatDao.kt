@@ -23,9 +23,6 @@ interface ChatDao {
     @Insert
     suspend fun insertMessage(message: ChatMessage)
 
-    @Query("DELETE FROM chat_messages WHERE id = :messageId")
-    suspend fun deleteMessageById(messageId: Long)
-
     @Query("DELETE FROM chat_messages WHERE sessionId = :sessionId")
     suspend fun deleteMessagesForSession(sessionId: Long)
 
@@ -37,4 +34,11 @@ interface ChatDao {
 
     @Query("DELETE FROM chat_sessions")
     suspend fun deleteAllSessions()
+
+    // Fungsi Baru untuk Edit Prompt
+    @Query("DELETE FROM chat_messages WHERE sessionId = :sessionId AND timestamp > :timestamp")
+    suspend fun deleteMessagesAfter(sessionId: Long, timestamp: Long)
+
+    @Query("UPDATE chat_messages SET content = :newContent WHERE id = :messageId")
+    suspend fun updateMessageContent(messageId: Long, newContent: String)
 }
