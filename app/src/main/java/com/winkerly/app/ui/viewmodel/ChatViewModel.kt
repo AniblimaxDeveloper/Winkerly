@@ -11,6 +11,7 @@ import com.winkerly.app.net.AiClient
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.util.Calendar
 
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val db = AppDatabase.getDatabase(app)
@@ -23,9 +24,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val systemPrompt = settingsManager.systemPrompt.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "")
     val accentColor = settingsManager.accentColor.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), "#10A37F")
     val temperature = settingsManager.temperature.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 0.7f)
-    val topP = settingsManager.topP.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 1.0f)
-    val freqPenalty = settingsManager.freqPenalty.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 0.0f)
-    val presPenalty = settingsManager.presPenalty.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 0.0f)
     val maxTokens = settingsManager.maxTokens.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 2048f)
     val fontSize = settingsManager.fontSize.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 16f)
     val ttsSpeed = settingsManager.ttsSpeed.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 1.0f)
@@ -42,6 +40,36 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val filteredSessions = combine(allSessions, _searchQuery) { sessions, query ->
         if (query.isBlank()) sessions else sessions.filter { it.title.contains(query, ignoreCase = true) }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), emptyList())
+
+    // Mengelompokkan sesi berdasarkan waktu (Hari ini, Kemarin, 7 Hari Terakhir)
+    val groupedSessions = filteredSessions.map { sessions ->
+        val todayStart = getStartOfDay(0)
+        val yesterdayStart = getStartOfDay(-1)
+        val weekStart = getStartOfDay(-7)
+
+        val today = mutableListOf<ChatSession>()
+        val yesterday = mutableListOf<ChatSession>()
+        val last7Days = mutableListOf<ChatSession>()
+        val older = mutableListOf<ChatSession>()
+
+        sessions.forEach {
+            if (it.timestamp >= todayStart) today.add(it)
+            else if (it.timestamp >= yesterdayStart) yesterday.add(it)
+            else if (it.timestamp >= weekStart) last7Days.add(it)
+            else older.add(it)
+        }
+        mapOf("Today" to today, "Yesterday" to yesterday, "Previous 7 Days" to last7Days, "Older" to older)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), emptyMap())
+
+    private fun getStartOfDay(offset: Int): Long {
+        val cal = Calendar.getInstance()
+        cal.add(Calendar.DAY_OF_YEAR, offset)
+        cal.set(Calendar.HOUR_OF_DAY, 0)
+        cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        return cal.timeInMillis
+    }
 
     private val _activeSessionId = MutableStateFlow<Long?>(null)
     val activeSessionId = _activeSessionId.asStateFlow()
@@ -63,14 +91,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun setSearchQuery(query: String) { _searchQuery.value = query }
     fun clearError() { _errorMessage.value = null }
 
-    fun saveSettings(
-        key: String, url: String, model: String, prompt: String, color: String, 
-        temp: Float, topP: Float, freq: Float, pres: Float, tokens: Float, 
-        font: Float, speed: Float, pitch: Float, haptic: Boolean, autoCopy: Boolean, dark: Boolean
-    ) {
-        viewModelScope.launch { 
-            settingsManager.saveSettings(key, url, model, prompt, color, temp, topP, freq, pres, tokens, font, speed, pitch, haptic, autoCopy, dark) 
-        }
+    fun saveSettings(key: String, url: String, model: String, prompt: String, color: String, temp: Float, tokens: Float, font: Float, speed: Float, pitch: Float, haptic: Boolean, autoCopy: Boolean, dark: Boolean) {
+        viewModelScope.launch { settingsManager.saveSettings(key, url, model, prompt, color, temp, 1.0f, 0.0f, 0.0f, tokens, font, speed, pitch, haptic, autoCopy, dark) }
     }
 
     fun createNewSession() {
@@ -125,11 +147,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             activeMessages.value.forEach { history.add(it.role to it.content) }
 
             val selectedModel = overrideModel ?: modelId.value
-            val client = AiClient(
-                baseUrl.value, apiKey.value, selectedModel, 
-                temperature.value, maxTokens.value.toInt(), 
-                topP.value, freqPenalty.value, presPenalty.value
-            )
+            val client = AiClient(baseUrl.value, apiKey.value, selectedModel, temperature.value, maxTokens.value.toInt())
             val fullResponse = StringBuilder()
 
             client.streamChat(history,

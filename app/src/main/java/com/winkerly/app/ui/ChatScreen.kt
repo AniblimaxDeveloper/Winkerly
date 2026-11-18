@@ -11,6 +11,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -18,7 +19,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField // <-- IMPORT YANG HILANG DITAMBAHKAN DI SINI
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -36,9 +37,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.winkerly.app.data.db.ChatMessage
+import com.winkerly.app.data.db.ChatSession
 import com.winkerly.app.ui.components.MarkdownText
 import com.winkerly.app.ui.viewmodel.ChatViewModel
 import kotlinx.coroutines.launch
@@ -53,7 +56,7 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
     val haptic = LocalHapticFeedback.current
     val listState = rememberLazyListState()
 
-    val sessions by vm.filteredSessions.collectAsState()
+    val groupedSessions by vm.groupedSessions.collectAsState()
     val messages by vm.activeMessages.collectAsState()
     val activeId by vm.activeSessionId.collectAsState()
     val isGenerating by vm.isGenerating.collectAsState()
@@ -68,7 +71,6 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
 
     var input by remember { mutableStateOf("") }
     var autoScroll by remember { mutableStateOf(true) }
-    var selectedMessageForSheet by remember { mutableStateOf<ChatMessage?>(null) }
     var expandedModelMenu by remember { mutableStateOf(false) }
     
     val models = listOf("openrouter/free", "google/gemma-2-9b-it:free", "meta-llama/llama-3-8b-instruct:free")
@@ -90,30 +92,6 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
         if (autoScroll && messages.isNotEmpty()) listState.animateScrollToItem(if (isGenerating) messages.size else messages.size - 1)
     }
 
-    if (selectedMessageForSheet != null) {
-        ModalBottomSheet(onDismissRequest = { selectedMessageForSheet = null }) {
-            val msgContent = selectedMessageForSheet?.content ?: ""
-            Column(Modifier.padding(16.dp)) {
-                Text("Message Options", style = MaterialTheme.typography.titleLarge)
-                Spacer(Modifier.height(16.dp))
-                Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
-                    IconButton(onClick = { tts?.speak(msgContent, TextToSpeech.QUEUE_FLUSH, null, ""); selectedMessageForSheet = null }) { Icon(Icons.Default.VolumeUp, contentDescription = "TTS") }
-                    IconButton(onClick = { 
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        clipboard.setPrimaryClip(ClipData.newPlainText("Winkerly", msgContent))
-                        selectedMessageForSheet = null 
-                    }) { Icon(Icons.Default.ContentCopy, contentDescription = "Copy") }
-                    IconButton(onClick = { 
-                        val sendIntent = Intent().apply { action = Intent.ACTION_SEND; putExtra(Intent.EXTRA_TEXT, msgContent); type = "text/plain" }
-                        context.startActivity(Intent.createChooser(sendIntent, "Share Message")); selectedMessageForSheet = null 
-                    }) { Icon(Icons.Default.Share, contentDescription = "Share") }
-                    IconButton(onClick = { vm.regenerateLastMessage(); selectedMessageForSheet = null }) { Icon(Icons.Default.Refresh, contentDescription = "Regenerate") }
-                }
-                Spacer(Modifier.height(32.dp))
-            }
-        }
-    }
-
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -126,7 +104,7 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                     ) {
                         Icon(Icons.Default.Add, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
-                        Text("New Chat", fontWeight = FontWeight.Bold)
+                        Text("New chat", fontWeight = FontWeight.Bold)
                     }
                     Spacer(Modifier.height(16.dp))
                     OutlinedTextField(
@@ -137,22 +115,28 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                 }
                 
                 LazyColumn(Modifier.weight(1f)) {
-                    items(sessions) { session ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth().clickable { vm.selectSession(session.id); scope.launch { drawerState.close() } }.padding(horizontal = 16.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(Icons.Default.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.Gray)
-                            Spacer(Modifier.width(12.dp))
-                            Text(session.title, maxLines = 1, modifier = Modifier.weight(1f), fontSize = 14.sp, color = if (session.id == activeId) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
-                            
-                            var showMenu by remember { mutableStateOf(false) }
-                            Box {
-                                IconButton(onClick = { showMenu = true }, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.MoreHoriz, contentDescription = null, tint = Color.Gray) }
-                                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                                    DropdownMenuItem(text = { Text(if (session.isPinned) "Unpin" else "Pin") }, onClick = { vm.togglePinSession(session.id, session.isPinned); showMenu = false })
-                                    DropdownMenuItem(text = { Text("Rename") }, onClick = { vm.renameSession(session.id, "Renamed"); showMenu = false })
-                                    DropdownMenuItem(text = { Text("Delete") }, onClick = { vm.deleteSession(session.id); showMenu = false })
+                    groupedSessions.forEach { (header, sessions) ->
+                        if (sessions.isNotEmpty()) {
+                            item {
+                                Text(header, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontSize = 12.sp, color = Color.Gray, fontWeight = FontWeight.Bold)
+                            }
+                            items(sessions) { session ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().clickable { vm.selectSession(session.id); scope.launch { drawerState.close() } }.padding(horizontal = 16.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (session.id == activeId) MaterialTheme.colorScheme.primary else Color.Gray)
+                                    Spacer(Modifier.width(12.dp))
+                                    Text(session.title, maxLines = 1, modifier = Modifier.weight(1f), fontSize = 14.sp, color = if (session.id == activeId) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                                    
+                                    var showMenu by remember { mutableStateOf(false) }
+                                    Box {
+                                        IconButton(onClick = { showMenu = true }, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.MoreHoriz, contentDescription = null, tint = Color.Gray) }
+                                        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                                            DropdownMenuItem(text = { Text("Rename") }, onClick = { vm.renameSession(session.id, "Renamed"); showMenu = false })
+                                            DropdownMenuItem(text = { Text("Delete") }, onClick = { vm.deleteSession(session.id); showMenu = false })
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -160,10 +144,10 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                 }
                 
                 Divider()
-                Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(24.dp))
+                Row(Modifier.fillMaxWidth().padding(16.dp).clickable { onSettings() }, verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(12.dp))
-                    Text("Winkerly User", fontWeight = FontWeight.Medium)
+                    Text("Settings", fontWeight = FontWeight.Medium)
                 }
             }
         }
@@ -180,8 +164,7 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                             DropdownMenu(expanded = expandedModelMenu, onDismissRequest = { expandedModelMenu = false }) {
                                 models.forEach { model ->
                                     DropdownMenuItem(text = { Text(model) }, onClick = { 
-                                        // Update model ID di setting secara lokal untuk UI ini
-                                        vm.saveSettings("", "", model, "", "", 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, true, false, true)
+                                        vm.saveSettings("", "", model, "", "", 0f, 0f, 0f, 0f, true, false, true)
                                         expandedModelMenu = false 
                                     })
                                 }
@@ -194,23 +177,31 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
                 )
-            },
-            floatingActionButton = {
-                if (listState.firstVisibleItemIndex > 3) {
-                    FloatingActionButton(
-                        onClick = { scope.launch { listState.animateScrollToItem(messages.size) } }, 
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant, 
-                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant, 
-                        shape = CircleShape, 
-                        modifier = Modifier.size(40.dp)
-                    ) { Icon(Icons.Default.ArrowDownward, contentDescription = null) }
-                }
             }
         ) { padding ->
             Column(Modifier.padding(padding).fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-                if (activeId == null) {
-                    Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { 
-                        Text("How can I help you today?", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) 
+                if (activeId == null || (messages.isEmpty() && !isGenerating)) {
+                    // Welcome Screen ala ChatGPT
+                    Column(
+                        modifier = Modifier.weight(1f).fillMaxWidth().padding(24.dp),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(48.dp))
+                        Spacer(Modifier.height(16.dp))
+                        Text("How can I help you today?", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(32.dp))
+                        
+                        // Suggestion Cards
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            SuggestionCard("Explain quantum computing in simple terms", Modifier.weight(1f)) { vm.sendMessage(it) }
+                            SuggestionCard("Write a Python script to scrape a website", Modifier.weight(1f)) { vm.sendMessage(it) }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            SuggestionCard("Create a workout plan for beginners", Modifier.weight(1f)) { vm.sendMessage(it) }
+                            SuggestionCard("Tell me a fun fact about space", Modifier.weight(1f)) { vm.sendMessage(it) }
+                        }
                     }
                 } else {
                     LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -219,9 +210,8 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                                 msg = msg, 
                                 context = context, 
                                 fontSize = fontSize, 
-                                autoCopy = autoCopy, 
-                                onLongPress = { selectedMessageForSheet = msg },
-                                onDelete = { vm.deleteMessage(msg.id) }
+                                autoCopy = autoCopy,
+                                onRegenerate = { vm.regenerateLastMessage() }
                             )
                         }
                         if (isGenerating) {
@@ -232,8 +222,7 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                                     context = context, 
                                     fontSize = fontSize, 
                                     autoCopy = false, 
-                                    onLongPress = {},
-                                    onDelete = {},
+                                    onRegenerate = {},
                                     isStreaming = true
                                 ) 
                             }
@@ -241,15 +230,16 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                     }
                 }
 
-                // ChatGPT Style Input Box (Sudah Diperbaiki)
-                Box(Modifier.fillMaxWidth().padding(12.dp)) {
+                // Input Box ala ChatGPT
+                Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
                     Surface(
                         shape = RoundedCornerShape(24.dp),
                         color = MaterialTheme.colorScheme.surfaceVariant,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color.Gray.copy(alpha = 0.2f))
                     ) {
-                        Row(Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(onClick = { /* Attachment placeholder */ }) { Icon(Icons.Default.Add, contentDescription = "Attach", tint = Color.Gray) }
+                        Row(Modifier.padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(onClick = { /* Attachment */ }) { Icon(Icons.Default.Add, contentDescription = "Attach", tint = Color.Gray) }
                             
                             BasicTextField(
                                 value = input,
@@ -270,7 +260,7 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                                 speechLauncher.launch(intent)
                             }) { Icon(Icons.Default.Mic, contentDescription = "Voice", tint = Color.Gray) }
 
-                            if (input.isNotBlank()) {
+                            if (input.isNotBlank() || isGenerating) {
                                 IconButton(
                                     onClick = { 
                                         if (isGenerating) vm.stopGeneration()
@@ -288,8 +278,19 @@ fun ChatScreen(vm: ChatViewModel, onSettings: () -> Unit) {
                         }
                     }
                 }
+                Text("Winkerly can make mistakes. Consider checking important information.", modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), textAlign = TextAlign.Center, fontSize = 10.sp, color = Color.Gray)
             }
         }
+    }
+}
+
+@Composable
+fun SuggestionCard(text: String, modifier: Modifier = Modifier, onClick: (String) -> Unit) {
+    Card(
+        modifier = modifier.clickable { onClick(text) },
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+    ) {
+        Text(text, modifier = Modifier.padding(12.dp), fontSize = 12.sp, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -299,8 +300,7 @@ fun ChatGPTMessageRow(
     context: Context, 
     fontSize: Float, 
     autoCopy: Boolean, 
-    onLongPress: () -> Unit,
-    onDelete: () -> Unit,
+    onRegenerate: () -> Unit,
     isStreaming: Boolean = false
 ) {
     if (autoCopy && msg.role == "assistant" && !isStreaming) {
@@ -312,7 +312,7 @@ fun ChatGPTMessageRow(
     val bgColor = if (isUser) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.background
     val alignment = if (isUser) Alignment.CenterEnd else Alignment.CenterStart
 
-    Box(Modifier.fillMaxWidth().background(bgColor).clickable(onClick = onLongPress).padding(vertical = 16.dp, horizontal = 16.dp), contentAlignment = alignment) {
+    Box(Modifier.fillMaxWidth().background(bgColor).padding(vertical = 16.dp, horizontal = 16.dp), contentAlignment = alignment) {
         Row(Modifier.widthIn(max = 600.dp), horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start) {
             if (!isUser) {
                 Box(Modifier.size(30.dp).background(MaterialTheme.colorScheme.primary, CircleShape), contentAlignment = Alignment.Center) {
@@ -321,14 +321,30 @@ fun ChatGPTMessageRow(
                 Spacer(Modifier.width(12.dp))
             }
 
-            SelectionContainer {
-                if (isUser) {
-                    Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(20.dp)) {
-                        Text(msg.content, modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp), fontSize = fontSize.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                } else {
-                    Column(Modifier.weight(1f, fill = false)) {
+            Column {
+                SelectionContainer {
+                    if (isUser) {
+                        Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(20.dp)) {
+                            Text(msg.content, modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp), fontSize = fontSize.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    } else {
                         MarkdownText(msg.content, fontSize)
+                    }
+                }
+                
+                // Action Row (Hanya muncul di bawah pesan AI yang sudah selesai)
+                if (!isUser && !isStreaming) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { 
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clipboard.setPrimaryClip(ClipData.newPlainText("Winkerly", msg.content)) 
+                        }, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = Color.Gray, modifier = Modifier.size(16.dp)) }
+                        
+                        IconButton(onClick = onRegenerate, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.Refresh, contentDescription = "Regenerate", tint = Color.Gray, modifier = Modifier.size(16.dp)) }
+                        
+                        IconButton(onClick = { }, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.ThumbUp, contentDescription = "Good", tint = Color.Gray, modifier = Modifier.size(16.dp)) }
+                        IconButton(onClick = { }, modifier = Modifier.size(24.dp)) { Icon(Icons.Default.ThumbDown, contentDescription = "Bad", tint = Color.Gray, modifier = Modifier.size(16.dp)) }
                     }
                 }
             }
