@@ -1,0 +1,10 @@
+.env
+*.iml
+.gradle/
+.idea/
+build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+backend/__pycache__/
+backend/*.pyc

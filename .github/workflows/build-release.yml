@@ -1,0 +1,54 @@
+name: Build Winkerly Release APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
+      - run: flutter pub get
+      - run: flutter create --project-name winkerly --org com.winkerly .
+        
+      - name: Fix Kotlin Version
+        run: sed -i 's/id "org.jetbrains.kotlin.android" version ".*"/id "org.jetbrains.kotlin.android" version "1.9.0"/g' android/settings.gradle
+        
+      # SURAT IZIN KHUSUS INTERNET (Bypass pemblokiran OS)
+      - name: Create Network Security Config
+        run: |
+          mkdir -p android/app/src/main/res/xml
+          cat << 'XML' > android/app/src/main/res/xml/network_security_config.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <network-security-config>
+              <base-config cleartextTrafficPermitted="true">
+                  <trust-anchors>
+                      <certificates src="system" />
+                  </trust-anchors>
+              </base-config>
+          </network-security-config>
+          XML
+          
+      - name: Inject Permissions and Config to Manifest
+        run: |
+          sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />' android/app/src/main/AndroidManifest.xml
+          sed -i 's/<application/<application android:networkSecurityConfig="@xml\/network_security_config"/' android/app/src/main/AndroidManifest.xml
+          
+      - name: Generate App Icons
+        run: flutter pub run flutter_launcher_icons
+        
+      - run: flutter build apk --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: winkerly-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
